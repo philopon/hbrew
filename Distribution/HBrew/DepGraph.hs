@@ -1,38 +1,78 @@
-{-#LANGUAGE DeriveDataTypeable, ViewPatterns, NoMonomorphismRestriction, NamedFieldPuns #-}
-
+{-#LANGUAGE DeriveDataTypeable, ViewPatterns, NamedFieldPuns#-}
 module Distribution.HBrew.DepGraph
-       ( Node(packageInfo, cabalFile)
-       , SubGraph(root)
-       , Graph
-       , Graphs
-       , makeConfigGraph
-       , flatten, isUserPkg
-       , overlap, isOverlap
-       , lookupSubGraph
-       , rootPkgId
+       ( Graph, isUserPkg
+       , Node, packageInfo, cabalFile
+       , flatten
+       , makeConfigGraph, makeProcedure
        ) where
 
 import Control.Exception
+
 import System.FilePath
-import Control.Monad
 import System.Directory
-import Distribution.Package (PackageId, InstalledPackageId, packageName, packageVersion)
-import Distribution.InstalledPackageInfo
-import Data.List
-import Data.Typeable(Typeable)
-import Data.Word(Word)
-import Data.Maybe
 import Data.Map (Map)
 import qualified Data.Map as M
 
+import qualified Data.IntMap as IM
+
+import Data.IntSet (IntSet)
+import qualified Data.IntSet as IS
+
+import Data.Array
+import Data.Maybe
+import Data.Typeable
+import Data.List
+
+import Distribution.Package hiding (depends)
+import Distribution.InstalledPackageInfo
 import Distribution.HBrew.GhcPkg
+import Distribution.HBrew.Utils
+
+import Data.Word
 
 newtype PErrorException = PErrorException PError deriving (Show, Typeable)
 instance Exception PErrorException
 
-data Node = UserPkg { packageInfo :: InstalledPackageInfo
-                    , cabalFile   :: FilePath
-                    }
+type Procedure = (Graph, [PackageId])
+
+makeProcedure :: Graph -> [PackageId] -> Procedure
+makeProcedure _all pids =
+  let nodes = concatMap (\pid -> maybe [] id $ lookupNodesByPid pid _all) pids
+      push  = rejectConflicts .rejectConflictsWithToInstalls pids $ descendant _all nodes
+      ins   = filter (`notMemberPid` push) pids
+  in (dropGlobal push, ins)
+
+readConfFileIO :: FilePath -> IO InstalledPackageInfo
+readConfFileIO path = parseInstalledPackageInfo `fmap` readFile path >>= \info -> case info of
+  ParseFailed perr -> throwIO $ PErrorException perr
+  ParseOk _   i    -> return i
+
+
+data Graph = Graph { nodes    :: Map Node Int
+                   , edges    :: Array (Int,Int) Bool
+                   , dict     :: Map InstalledPackageId PackageId
+                   , revDict  :: Map PackageId [InstalledPackageId]
+                   }
+           deriving Show
+
+flatten :: Graph -> [Node]
+flatten Graph{nodes} = M.keys nodes
+
+updateDict :: Graph -> Graph
+updateDict gr@Graph{nodes} =
+  let (dict, revDict) =
+        M.foldlWithKey (\(d, r) n _ -> let iid = installedPackageId $ packageInfo n
+                                           pid = sourcePackageId $ packageInfo n
+                                       in (M.insert iid pid d, M.insertWith (++) pid [iid] r)
+                       ) (M.empty, M.empty) nodes
+  in gr{dict = dict, revDict = revDict}
+
+hasEdgeIdx :: Graph -> Int -> Int -> Bool
+hasEdgeIdx Graph{edges} a b = edges ! (a,b)
+
+data Node = UserPkg   { packageInfo :: InstalledPackageInfo
+                      , cabalFile   :: FilePath
+                      }
           | GlobalPkg { packageInfo :: InstalledPackageInfo
                       , cabalFile   :: FilePath
                       }
@@ -40,15 +80,7 @@ data Node = UserPkg { packageInfo :: InstalledPackageInfo
 
 isUserPkg :: Node -> Bool
 isUserPkg UserPkg{} = True
-isUserPkg _ = False
-
-dummyNode :: InstalledPackageId -> PackageId -> Node
-dummyNode ipid spid =
-  UserPkg { packageInfo = emptyInstalledPackageInfo { installedPackageId = ipid
-                                                    , sourcePackageId    = spid
-                                                    }
-          , cabalFile   = ""
-          }
+isUserPkg _         = False
 
 instance Eq Node where
   a == b = installedPackageId (packageInfo a) == installedPackageId (packageInfo b)
@@ -59,101 +91,105 @@ instance Ord Node where
     of EQ -> installedPackageId a `compare` installedPackageId b
        o  -> o
 
-data Graph = Graph { edges   :: Map Node [InstalledPackageId]
-                   , dict    :: Map InstalledPackageId PackageId
-                   , revDict :: Map PackageId InstalledPackageId
-                   }
-           deriving Show
-
-data SubGraph = SubGraph { graph :: Graph
-                         , root  :: InstalledPackageId
-                         }
-              deriving Show
-
-class Graphs a where
-  getGraph :: a -> Graph
-
-instance Graphs Graph where
-  getGraph = id
-
-instance Graphs SubGraph where
-  getGraph = graph
-
-instance Graphs a => Graphs (b, a) where
-  getGraph = getGraph. snd
-
-readConfFileIO :: FilePath -> IO InstalledPackageInfo
-readConfFileIO path = parseInstalledPackageInfo `fmap` readFile path >>= \info -> case info of
-  ParseFailed perr -> throwIO $ PErrorException perr
-  ParseOk _   i    -> return i
-
-getContentsRecursive :: Word -> FilePath -> IO [FilePath]
-getContentsRecursive ilim dir = sub ilim ""
-  where sub 0   _   = return []
-        sub lim rel = do
-          cont  <- filter (`notElem` [".", ".."]) `fmap` getDirectoryContents (dir </> rel)
-          files <- filterM (doesFileExist     . (dir </>)) $ map (rel </>) cont
-          dirs  <- filterM (doesDirectoryExist. (dir </>)) $ map (rel </>) cont
-          subc  <- mapM (sub (pred lim)) dirs
-          return $ files ++ concat subc
-
 makeConfigGraph :: FilePath -> Word -> IO Graph
 makeConfigGraph path limit = do
-  hbrew  <- filter (".conf" `isSuffixOf`) `fmap` getContentsRecursive limit path
-  hInfo  <- mapM (\f -> readConfFileIO ( path </> f) >>= \info -> return $ UserPkg   info f) hbrew
+  hbrew <- filter (".conf" `isSuffixOf`) `fmap` getContentsRecursive limit path
+  hInfo <- mapM (\f -> readConfFileIO ( path </> f) >>= \info -> return $ UserPkg info f) hbrew
 
   gPath  <- packageDir Global
   global <- filter (".conf" `isSuffixOf`) `fmap` getDirectoryContents gPath
   gInfo  <- mapM (\f -> readConfFileIO (gPath </> f) >>= \info -> return $ GlobalPkg info f) global
 
-  let info = gInfo ++ hInfo
-      nodes = M.fromList $ map (\i -> (i, depends $ packageInfo i)) info
-      tdict = map (\i -> let ifo = packageInfo i
-                         in (installedPackageId ifo, sourcePackageId ifo)) info
-  return $ Graph nodes (M.fromList tdict) (M.fromList $ map swap tdict)
+  let info     = gInfo ++ hInfo
+      nodes    = M.fromList $ zip info [0..]
+      revNodes = IM.fromList $ zip [0..] info
+      rel      = map (\i -> let inf = packageInfo i
+                            in (installedPackageId inf, sourcePackageId inf)
+                     ) info
+      dict     = M.fromList rel
+      revDict  = M.fromListWith (++) $ map (\(i,p) -> (p, [i])) rel
+      size  = M.size nodes - 1
+      edges = [((x,y), has) | x <- [0 .. size], y <- [0 .. size]
+                            , let has = case  IM.lookup x revNodes of
+                                    Nothing -> False
+                                    Just nx -> let iids = depends $ packageInfo nx
+                                                   nds  = map (\i -> lookupNode' i dict nodes) iids
+                                                   ys   = catMaybes $
+                                                          map (\i -> case i of
+                                                                  Just ny -> M.lookup ny nodes
+                                                                  Nothing -> Nothing
+                                                              ) nds
+                                               in y `elem` ys
+                            ]
+  return $ Graph nodes (array ((0,0), (size,size)) edges) dict revDict
 
-swap :: (t1, t) -> (t, t1)
-swap (a,b) = (b,a)
-
-subGraph :: Graphs a => a -> InstalledPackageId -> SubGraph
-subGraph (getGraph -> gr@Graph{edges, dict, revDict}) top_ =
-  (\e -> SubGraph (Graph e dict revDict) top_). M.fromList $ sub top_
-  where sub top = case M.lookup top dict >>= \pid -> M.lookup (dummyNode top pid) edges of
-          Nothing   -> []
-          Just pkgs -> let node = maybe (error $ "subGraph: lookup error.") id $ getNode gr top
-                       in (node, pkgs): concat (map sub pkgs)
-
-lookupSubGraph :: Graphs a => a -> PackageId -> Maybe SubGraph
-lookupSubGraph (getGraph -> gr@Graph{revDict = rd}) top =
-  subGraph gr `fmap` M.lookup top rd
-
-flatten :: Graphs a => a -> [Node]
-flatten (getGraph -> Graph{edges = e}) = M.keys e
-
-getNode :: Graphs a => a -> InstalledPackageId -> Maybe Node
-getNode (getGraph -> Graph{edges, dict} ) top = do
-  idx <- M.lookup top dict >>= \pid -> M.lookupIndex (dummyNode top pid) edges
-  return. fst $ M.elemAt idx edges
-
-overlap :: Graphs a => a -> a -> Maybe (a, a)
-overlap ga gb = case
-  intersectBy' (\a b -> packageName    a == packageName    b &&
-                        packageVersion a /= packageVersion b
-               ) aPids bPids of
-    []      -> Nothing
-    (a,b):_ -> Just $ if a > b then (ga, gb) else (gb, ga)
-  where aPids = map (sourcePackageId. packageInfo) (flatten $ getGraph ga)
-        bPids = map (sourcePackageId. packageInfo) (flatten $ getGraph gb)
-
-isOverlap :: Graphs a => a -> a -> Bool
-isOverlap a b = isJust $ overlap a b
-
-rootPkgId :: SubGraph ->  PackageId
-rootPkgId SubGraph{graph = Graph{dict}, root} =
-  maybe (error "rootPkgId: PackageId not found.") id $ M.lookup root dict
+rejectConflictsWithToInstalls :: [PackageId] -> Graph -> Graph
+rejectConflictsWithToInstalls _ins _gr@Graph{nodes = _nodes} =
+  let torej = ancestorIdx _gr. IS.fromList. M.elems $ M.filterWithKey
+              (\k _ -> let spid = (sourcePackageId. packageInfo) k
+                       in foldl' (\b i -> ( packageName spid == packageName i &&
+                                            packageVersion spid /= packageVersion i) || b
+                                 ) False _ins
+              ) _nodes
+  in _gr{ nodes = M.filter (`IS.notMember` torej) _nodes }
 
 
-intersectBy'             :: (a -> a -> Bool) -> [a] -> [a] -> [(a, a)]
-intersectBy' _  [] _     =  []
-intersectBy' _  _  []    =  []
-intersectBy' eq xs ys    =  [(x,fromJust y) | x <- xs, let y = find (eq x) ys, isJust y]
+rejectConflicts :: Graph -> Graph
+rejectConflicts _gr = updateDict $ _gr{nodes = foldl' sub (nodes _gr) $ conflicts _gr}
+  where sub nds c =
+          let torej = ancestorIdx _gr. IS.fromList . M.elems $ M.deleteMax c :: IntSet
+          in M.filter (`IS.member` torej) nds
+
+conflicts :: Graph -> [Map Node Int]
+conflicts Graph{nodes} = sub nodes
+  where sub m = case M.minViewWithKey m of
+          Nothing -> []
+          Just ((n,i), mp) ->
+            let name  = packageName. sourcePackageId . packageInfo
+                (c,o) = M.partitionWithKey (\k _ -> name n == name k) mp
+            in if M.null c then sub o else (M.insert n i c) : sub o
+
+ancestorIdx :: Graph -> IntSet -> IntSet
+ancestorIdx = dfsIdx parentIdx
+
+descendant :: Graph -> [Node] -> Graph
+descendant = (updateDict.) . dfs childrenIdx
+
+childrenIdx, parentIdx :: Graph -> Int -> IntSet
+childrenIdx gr@Graph{nodes} i = IS.filter (hasEdgeIdx gr i) . IS.fromList $ M.elems nodes
+parentIdx   gr@Graph{nodes} i = IS.filter (flip (hasEdgeIdx gr) i) . IS.fromList $ M.elems nodes
+
+dfs :: (Graph -> Int -> IntSet) -> Graph -> [Node] -> Graph
+dfs fun gr@Graph{nodes} nds =
+  let idx = IS.fromList . catMaybes $ map (flip M.lookup nodes) nds
+      set = dfsIdx fun gr idx
+  in gr{nodes = M.filter (\i -> i `IS.member` set) nodes}
+
+dfsIdx :: (Graph -> Int -> IntSet) -> Graph -> IntSet -> IntSet
+dfsIdx fun gr _is = _is `IS.union` go IS.empty _is
+  where go done is
+          | IS.null is = IS.empty
+          | otherwise  = let neighbor = IS.foldl (\a k -> fun gr k `IS.union` a) IS.empty is
+                             next     = IS.filter (`IS.notMember` done) neighbor
+                             nextdone = done `IS.union` neighbor
+                         in neighbor `IS.union` go nextdone next
+
+lookupNodesByPid :: PackageId -> Graph -> Maybe [Node]
+lookupNodesByPid pid Graph{revDict, dict, nodes} = do
+  iids <- M.lookup pid revDict
+  return. catMaybes $ map (\iid -> lookupNode' iid dict nodes) iids
+
+lookupNode' :: InstalledPackageId -> Map InstalledPackageId PackageId -> Map Node b -> Maybe Node
+lookupNode' iid dict nodes = do pid <- M.lookup iid dict
+                                idx <- M.lookupIndex (UserPkg emptyInstalledPackageInfo {
+                                                         installedPackageId = iid,
+                                                         sourcePackageId    = pid
+                                                         } "") nodes
+                                return . fst $ M.elemAt idx nodes
+
+notMemberPid :: PackageId -> Graph -> Bool
+notMemberPid pid Graph{revDict} = pid `M.notMember` revDict
+
+dropGlobal :: Graph -> Graph
+dropGlobal gr@Graph{nodes} =
+  updateDict $ gr{nodes = M.filterWithKey (\k _ -> isUserPkg k) nodes}

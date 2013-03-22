@@ -10,13 +10,14 @@ import System.IO
 import System.Environment
 import System.Directory
 
+import Distribution.Simple.Utils(cabalVersion)
+import Distribution.InstalledPackageInfo(installedPackageId)
+
 import Distribution.HBrew.Utils
 import Distribution.HBrew.GhcPkg
 import Distribution.HBrew.Cabal
 import Distribution.HBrew.DepGraph
-import Distribution.Simple.Utils(cabalVersion)
 import Distribution.HBrew.Management
-import Distribution.HBrew.Dependency
 import Distribution.HBrew.Haddock
 
 cabalCheck :: IO ()
@@ -42,7 +43,7 @@ setupAction args Config{confPackageDir, confLibDir, confBinDir} pkgs = do
   toInstalls <- cabalDryRun args pkgs
   graph      <- makeConfigGraph confLibDir 5
   let (toPush, toIns) = makeProcedure graph toInstalls
-  mapM_ (push confLibDir confPackageDir) toPush
+  push confLibDir confPackageDir $ flatten toPush
   recache
   mapM_ (cabalInstall1 [ "--haddock-hyperlink-source"
                        , "--symlink-bindir=" ++ confBinDir
@@ -61,7 +62,8 @@ summaryAction args Config{confPackageDir, confLibDir} pkgs = do
   toInstalls <- cabalDryRun args pkgs
   graph      <- makeConfigGraph confLibDir 5
   let (toPush, toIns) = makeProcedure graph toInstalls
-  mapM_ (\p -> putStr "[PUSH]    " >> putStrLn (showText $ root p) ) toPush
+  mapM_ (\n -> putStr "[PUSH]    " >>
+               putStrLn (showText . installedPackageId $ packageInfo n)) $ flatten toPush
   mapM_ (\p -> putStr "[INSTALL] " >> putStrLn (showText p) ) toIns
 
 makeConfig :: IO Config
@@ -69,8 +71,8 @@ makeConfig = do
   pName  <- getProgName
   pdir   <- packageDir User
   home   <- getHomeDirectory
-  libdir <- createDirectoryRecursive home [".cabal", "hbrew", "lib"]
-  bindir <- createDirectoryRecursive home [".cabal", "bin"]
+  libdir <- createDirectoryRecursive     home [".cabal", "hbrew", "lib"]
+  bindir <- createDirectoryRecursive     home [".cabal", "bin"]
   haddockdir <- createDirectoryRecursive home [".cabal", "hbrew", "doc"]
   return $ Config pName pdir libdir bindir haddockdir
 

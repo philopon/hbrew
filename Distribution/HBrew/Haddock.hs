@@ -16,7 +16,7 @@ haddock = proc "haddock"
 
 type ReadInterface = (FilePath, FilePath)
 
-readInterfaces :: Graphs a => a -> [ReadInterface]
+readInterfaces :: Graph -> [ReadInterface]
 readInterfaces gr = catMaybes. map sub. uniquify. map packageInfo $ flatten gr
   where sub pinfo = (,) <$> listToMaybe (haddockHTMLs      pinfo)
                     <*> listToMaybe (haddockInterfaces pinfo)
@@ -30,7 +30,7 @@ uniquify (ipi:ipis) =
         pVer  = packageVersion . sourcePackageId
 
 
-genIndex :: Graphs a => FilePath -> a -> IO ()
+genIndex :: FilePath -> Graph -> IO ()
 genIndex odir graph = do
   createAndWaitProcess (const $ return ()) (haddock args)
   where sub (html, ifs) = "--read-interface=" ++ html ++ ',' : ifs

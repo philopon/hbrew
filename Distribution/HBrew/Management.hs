@@ -9,9 +9,9 @@ import Distribution.HBrew.Compatibility
 import Distribution.HBrew.GhcPkg
 import Data.List
 
-push :: Graphs a => FilePath -> FilePath -> a -> IO ()
-push hbrewDir pDir gr = do
-  let files = map cabalFile. filter isUserPkg $ flatten gr
+push :: FilePath -> FilePath -> [Node] -> IO ()
+push hbrewDir pDir nodes = do
+  let files = map cabalFile $ filter isUserPkg nodes
   mapM_ (\f -> do let target = pDir </> takeBaseName f <.> "hbrew.conf"
                   e <- doesFileExist target
                   when (not e) $ link (hbrewDir </> f) target
