@@ -5,6 +5,7 @@ module Distribution.HBrew.Utils
        , createAndWaitProcess
        , createDirectoryRecursive
        , getContentsRecursive
+       , readConfFileIO
        ) where
 
 import Control.Monad
@@ -17,6 +18,7 @@ import System.IO(Handle)
 import System.Process (CreateProcess(..), CmdSpec(..), createProcess, waitForProcess)
 
 import Distribution.Text(Text, disp, simpleParse)
+import Distribution.InstalledPackageInfo
 
 import Text.PrettyPrint(render)
 
@@ -76,3 +78,12 @@ getContentsRecursive ilim dir = sub ilim ""
           dirs  <- filterM (doesDirectoryExist. (dir </>)) $ map (rel </>) cont
           subc  <- mapM (sub (pred lim)) dirs
           return $ files ++ concat subc
+
+
+newtype PErrorException = PErrorException PError deriving (Show, Typeable)
+instance Exception PErrorException
+
+readConfFileIO :: FilePath -> IO InstalledPackageInfo
+readConfFileIO path = parseInstalledPackageInfo `fmap` readFile path >>= \info -> case info of
+  ParseFailed perr -> throwIO $ PErrorException perr
+  ParseOk _   i    -> return i

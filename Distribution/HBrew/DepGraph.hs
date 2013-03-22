@@ -1,4 +1,4 @@
-{-#LANGUAGE DeriveDataTypeable, ViewPatterns, NamedFieldPuns#-}
+{-#LANGUAGE ViewPatterns, NamedFieldPuns#-}
 module Distribution.HBrew.DepGraph
        ( Graph, isUserPkg
        , Node, packageInfo, cabalFile
@@ -6,10 +6,6 @@ module Distribution.HBrew.DepGraph
        , makeConfigGraph, makeProcedure
        ) where
 
-import Control.Exception
-
-import System.FilePath
-import System.Directory
 import Data.Map (Map)
 import qualified Data.Map as M
 
@@ -20,18 +16,11 @@ import qualified Data.IntSet as IS
 
 import Data.Array
 import Data.Maybe
-import Data.Typeable
 import Data.List
 
 import Distribution.Package hiding (depends)
 import Distribution.InstalledPackageInfo
-import Distribution.HBrew.GhcPkg
 import Distribution.HBrew.Utils
-
-import Data.Word
-
-newtype PErrorException = PErrorException PError deriving (Show, Typeable)
-instance Exception PErrorException
 
 type Procedure = (Graph, [PackageId])
 
@@ -41,11 +30,6 @@ makeProcedure _all pids =
       push  = rejectConflicts .rejectConflictsWithToInstalls pids $ descendant _all nodes
       ins   = filter (`notMemberPid` push) pids
   in (dropGlobal push, ins)
-
-readConfFileIO :: FilePath -> IO InstalledPackageInfo
-readConfFileIO path = parseInstalledPackageInfo `fmap` readFile path >>= \info -> case info of
-  ParseFailed perr -> throwIO $ PErrorException perr
-  ParseOk _   i    -> return i
 
 
 data Graph = Graph { nodes    :: Map Node Int
@@ -91,14 +75,10 @@ instance Ord Node where
     of EQ -> installedPackageId a `compare` installedPackageId b
        o  -> o
 
-makeConfigGraph :: FilePath -> Word -> IO Graph
-makeConfigGraph path limit = do
-  hbrew <- filter (".conf" `isSuffixOf`) `fmap` getContentsRecursive limit path
-  hInfo <- mapM (\f -> readConfFileIO ( path </> f) >>= \info -> return $ UserPkg info f) hbrew
-
-  gPath  <- packageDir Global
-  global <- filter (".conf" `isSuffixOf`) `fmap` getDirectoryContents gPath
-  gInfo  <- mapM (\f -> readConfFileIO (gPath </> f) >>= \info -> return $ GlobalPkg info f) global
+makeConfigGraph :: [FilePath] -> [FilePath] -> IO Graph
+makeConfigGraph uConfs gConfs = do
+  hInfo <- mapM (\f -> readConfFileIO f >>= \info -> return $ UserPkg info f) uConfs
+  gInfo <- mapM (\f -> readConfFileIO f >>= \info -> return $ GlobalPkg info f) gConfs
 
   let info     = gInfo ++ hInfo
       nodes    = M.fromList $ zip info [0..]

@@ -1,18 +1,18 @@
 {-#LANGUAGE NamedFieldPuns#-}
 
-module Main (main) where
+--module Main (main) where
 
 import Control.Monad
 
-import Distribution.Package
-
 import System.IO
 import System.Environment
+import System.FilePath
 import System.Directory
 
 import Distribution.Simple.Utils(cabalVersion)
 import Distribution.InstalledPackageInfo(installedPackageId)
 
+import Distribution.Package
 import Distribution.HBrew.Utils
 import Distribution.HBrew.GhcPkg
 import Distribution.HBrew.Cabal
@@ -28,53 +28,73 @@ cabalCheck = do
     "Warning: Cabal library of cabal-install(" ++ showText cbl ++
     ") does't match it of " ++ prog ++ '(': showText cabalVersion ++ ")"
 
-data Config = Config { programName    :: String
-                     , confPackageDir :: FilePath
-                     , confLibDir     :: FilePath
-                     , confBinDir     :: FilePath
-                     , confHaddockDir :: FilePath
+data Config = Config { programName       :: String
+                     , confUserConfDir   :: FilePath
+                     , confGlobalConfDir :: FilePath
+                     , confBinDir        :: FilePath
+                     , confHBrewLibDir   :: FilePath
+                     , confHBrewConfDir  :: FilePath
+                     , confHBrewDocDir   :: FilePath
                      }
               deriving Show
 
 
-setupAction :: [String] -> Config -> [PackageId] -> IO ()
-setupAction args Config{confPackageDir, confLibDir, confBinDir} pkgs = do
-  reset confPackageDir
-  toInstalls <- cabalDryRun args pkgs
-  graph      <- makeConfigGraph confLibDir 5
-  let (toPush, toIns) = makeProcedure graph toInstalls
-  push confLibDir confPackageDir $ flatten toPush
-  recache
-  mapM_ (cabalInstall1 [ "--haddock-hyperlink-source"
-                       , "--symlink-bindir=" ++ confBinDir
-                       ] confPackageDir confLibDir) toIns
+makeConfig :: IO Config
+makeConfig = do
+  home       <- getHomeDirectory
+  pName      <- getProgName
+  uConfDir   <- packageDir User
+  gConfDir   <- packageDir Global
+  binDir     <- createDirectoryRecursive home [".cabal", "bin"]
+  hbLibdir   <- createDirectoryRecursive home [".cabal", "hbrew", "lib"]
+  hbConfDir  <- createDirectoryRecursive home [".cabal", "hbrew", "conf"]
+  hbDockdir  <- createDirectoryRecursive home [".cabal", "hbrew", "doc"]
+  return $ Config { programName       = pName
+                  , confUserConfDir   = uConfDir
+                  , confGlobalConfDir = gConfDir
+                  , confBinDir        = binDir
+                  , confHBrewLibDir   = hbLibdir
+                  , confHBrewConfDir  = hbConfDir
+                  , confHBrewDocDir   = hbDockdir
+                  }
 
+configGraph :: Config -> IO Graph
+configGraph Config{confGlobalConfDir, confHBrewConfDir} = do
+  uConfs <- (map (confHBrewConfDir </>) . filter (`notElem` [".", ".."])) `fmap`
+            getDirectoryContents confHBrewConfDir
+  gConfs <- (map (confGlobalConfDir </>) . filter (`notElem` [".", "..", "package.cache"])) `fmap`
+            getDirectoryContents confGlobalConfDir
+  makeConfigGraph uConfs gConfs
+
+installAction :: [String] -> Config -> [PackageId] -> IO ()
+installAction args conf@Config{confUserConfDir, confHBrewConfDir, confHBrewLibDir, confBinDir} pkgs = do
+  reset confUserConfDir
+  toInstall <- cabalDryRun args pkgs
+  graph     <- configGraph conf
+  let (toPush, toIns) = makeProcedure graph toInstall
+  push confHBrewConfDir confUserConfDir $ flatten toPush
+  recache
+  when (not $ null toIns) $ do
+    cabalInstall confHBrewLibDir $ [ "--haddock-hyperlink-source"
+                                   , "--symlink-bindir=" ++ confBinDir
+                                   ] ++ map showText toIns
+  pull confUserConfDir confHBrewLibDir confHBrewConfDir
+  recache
 
 haddockAction :: Config -> IO ()
-haddockAction Config{confLibDir, confHaddockDir} = do
-  putStrLn "Generate Haddock index file."
-  graph <- makeConfigGraph confLibDir 5
-  genIndex confHaddockDir graph
+haddockAction conf@Config{confHBrewDocDir} = do
+  graph <- configGraph conf
+  genIndex confHBrewDocDir graph
 
-summaryAction :: [String] -> Config -> [PackageId] -> IO ()
-summaryAction args Config{confPackageDir, confLibDir} pkgs = do
-  reset confPackageDir
-  toInstalls <- cabalDryRun args pkgs
-  graph      <- makeConfigGraph confLibDir 5
-  let (toPush, toIns) = makeProcedure graph toInstalls
+dryRunAction :: [String] -> Config -> [PackageId] -> IO ()
+dryRunAction args conf@Config{confUserConfDir} pkgs = do
+  reset confUserConfDir
+  toInstall <- cabalDryRun args pkgs
+  graph     <- configGraph conf
+  let (toPush, toIns) = makeProcedure graph toInstall
   mapM_ (\n -> putStr "[PUSH]    " >>
                putStrLn (showText . installedPackageId $ packageInfo n)) $ flatten toPush
   mapM_ (\p -> putStr "[INSTALL] " >> putStrLn (showText p) ) toIns
-
-makeConfig :: IO Config
-makeConfig = do
-  pName  <- getProgName
-  pdir   <- packageDir User
-  home   <- getHomeDirectory
-  libdir <- createDirectoryRecursive     home [".cabal", "hbrew", "lib"]
-  bindir <- createDirectoryRecursive     home [".cabal", "bin"]
-  haddockdir <- createDirectoryRecursive home [".cabal", "hbrew", "doc"]
-  return $ Config pName pdir libdir bindir haddockdir
 
 preprocess :: IO Config
 preprocess = cabalCheck >> makeConfig
@@ -83,11 +103,12 @@ help :: String -> String
 help pName = unlines
              [ "usage: " ++ pName ++ " COMMAND [Args]"
              , "  COMMAND:"
-             , "    install"
-             , "    setup"
-             , "    reset"
-             , "    summary"
-             , "    haddock"
+             , "    install\tinstall package"
+             , "    setup\tinstall package with --only-dependences"
+             , "    dryrun [install|setup]\tdry run"
+             , ""
+             , "    reset\tpull all hbrew packages"
+             , "    haddock\tgenerate haddock"
              ]
 
 main :: IO ()
@@ -95,9 +116,11 @@ main = do
   args_  <- getArgs
   config <- preprocess
   case args_ of
-    "install":args -> setupAction [] config $ map readText args
-    "setup":args   -> setupAction ["--only-dependencies"] config $ map readText args
-    "reset":_      -> reset (confPackageDir config)
-    "summary":args -> summaryAction [] config $ map readText args
-    "haddock":_    -> haddockAction config
-    _              -> putStrLn $ help (programName config)
+    "install":args          -> installAction [] config $ map readText args
+    "setup":  args          -> installAction ["--only-dependencies"] config $ map readText args
+
+    "reset":_               -> reset (confUserConfDir config)
+    "dryrun":"install":args -> dryRunAction [] config $ map readText args
+    "dryrun":"setup":  args -> dryRunAction ["--only-dependencies"] config $ map readText args
+    "haddock":_             -> haddockAction config
+    _                       -> putStrLn $ help (programName config)

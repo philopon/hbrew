@@ -17,7 +17,7 @@ haddock = proc "haddock"
 type ReadInterface = (FilePath, FilePath)
 
 readInterfaces :: Graph -> [ReadInterface]
-readInterfaces gr = catMaybes. map sub. uniquify. map packageInfo $ flatten gr
+readInterfaces gr = catMaybes. map sub. uniquify. filter exposed. map packageInfo $ flatten gr
   where sub pinfo = (,) <$> listToMaybe (haddockHTMLs      pinfo)
                     <*> listToMaybe (haddockInterfaces pinfo)
 
