@@ -22,16 +22,6 @@ import Distribution.Package hiding (depends)
 import Distribution.InstalledPackageInfo
 import Distribution.HBrew.Utils
 
-type Procedure = (Graph, [PackageId])
-
-makeProcedure :: Graph -> [PackageId] -> Procedure
-makeProcedure _all pids =
-  let nodes = concatMap (\pid -> maybe [] id $ lookupNodesByPid pid _all) pids
-      push  = rejectConflicts .rejectConflictsWithToInstalls pids $ descendant _all nodes
-      ins   = filter (`notMemberPid` push) pids
-  in (dropGlobal push, ins)
-
-
 data Graph = Graph { nodes    :: Map Node Int
                    , edges    :: Array (Int,Int) Bool
                    , dict     :: Map InstalledPackageId PackageId
@@ -65,6 +55,11 @@ data Node = UserPkg   { packageInfo :: InstalledPackageInfo
 isUserPkg :: Node -> Bool
 isUserPkg UserPkg{} = True
 isUserPkg _         = False
+
+isGlobalPkg :: Node -> Bool
+isGlobalPkg GlobalPkg{} = True
+isGlobalPkg _           = False
+
 
 instance Eq Node where
   a == b = installedPackageId (packageInfo a) == installedPackageId (packageInfo b)
@@ -103,6 +98,16 @@ makeConfigGraph uConfs gConfs = do
                             ]
   return $ Graph nodes (array ((0,0), (size,size)) edges) dict revDict
 
+
+type Procedure = (Graph, [PackageId])
+
+makeProcedure :: Graph -> [PackageId] -> Procedure
+makeProcedure _all pids =
+  let nodes = nub $ concatMap (\pid -> maybe [] id $ lookupNodesByPid pid _all) pids
+      rej    = rejectConflicts pids . rejectConflictsWithToInstalls pids $ descendant _all nodes
+      ins    = filter (`notMemberPid` rej) pids
+  in (dropGlobal rej, ins)
+
 rejectConflictsWithToInstalls :: [PackageId] -> Graph -> Graph
 rejectConflictsWithToInstalls _ins _gr@Graph{nodes = _nodes} =
   let torej = ancestorIdx _gr. IS.fromList. M.elems $ M.filterWithKey
@@ -111,22 +116,26 @@ rejectConflictsWithToInstalls _ins _gr@Graph{nodes = _nodes} =
                                             packageVersion spid /= packageVersion i) || b
                                  ) False _ins
               ) _nodes
-  in _gr{ nodes = M.filter (`IS.notMember` torej) _nodes }
+  in updateDict $ _gr{ nodes = M.filter (`IS.notMember` torej) _nodes }
 
-
-rejectConflicts :: Graph -> Graph
-rejectConflicts _gr = updateDict $ _gr{nodes = foldl' sub (nodes _gr) $ conflicts _gr}
+rejectConflicts :: [PackageId] -> Graph -> Graph
+rejectConflicts _ins _gr = updateDict $ _gr{nodes = foldl' sub (nodes _gr) $ conflicts _gr}
   where sub nds c =
-          let torej = ancestorIdx _gr. IS.fromList . M.elems $ M.deleteMax c :: IntSet
-          in M.filter (`IS.member` torej) nds
+          let hold = IS.fromList. M.elems $
+                     case M.filterWithKey (\k _ -> (sourcePackageId. packageInfo) k `elem` _ins) c of
+                       m | M.null m  -> M.filterWithKey (\k _ -> isGlobalPkg k) c
+                         | otherwise -> m
+              all_  = IS.fromList $ M.elems c
+              torej = ancestorIdx _gr $ all_ `IS.difference` hold
+          in M.filter (`IS.notMember` torej) nds
 
 conflicts :: Graph -> [Map Node Int]
 conflicts Graph{nodes} = sub nodes
   where sub m = case M.minViewWithKey m of
           Nothing -> []
           Just ((n,i), mp) ->
-            let name  = packageName. sourcePackageId . packageInfo
-                (c,o) = M.partitionWithKey (\k _ -> name n == name k) mp
+            let name   = packageName. sourcePackageId . packageInfo
+                (c, o) = M.partitionWithKey (\k _ -> name n == name k) mp
             in if M.null c then sub o else (M.insert n i c) : sub o
 
 ancestorIdx :: Graph -> IntSet -> IntSet
