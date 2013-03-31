@@ -1,7 +1,9 @@
 module Distribution.HBrew.Haddock (genIndex) where
 
 import Control.Applicative
+import Control.Monad
 import System.Process
+import System.Directory
 
 import Distribution.Package
 import Distribution.HBrew.Utils
@@ -16,10 +18,20 @@ haddock = proc "haddock"
 
 type ReadInterface = (FilePath, FilePath)
 
-readInterfaces :: Graph -> [ReadInterface]
-readInterfaces gr = catMaybes. map sub. uniquify. filter exposed. map packageInfo $ flatten gr
-  where sub pinfo = (,) <$> listToMaybe (haddockHTMLs      pinfo)
-                    <*> listToMaybe (haddockInterfaces pinfo)
+readInterfaces :: Graph -> IO [ReadInterface]
+readInterfaces gr = filterM exists. catMaybes. map toReadInterface.
+                    uniquify. filter exposed. map packageInfo $ flatten gr
+  where toReadInterface pinfo = (,) <$>
+                                listToMaybe (haddockHTMLs      pinfo) <*>
+                                listToMaybe (haddockInterfaces pinfo)
+        exists (_, hdc) = doesFileExist hdc
+                          >>= \e -> if e
+                                    then return True
+                                    else do putStr "Warning: "
+                                            putStr $ show hdc
+                                            putStrLn " does not exists."
+                                            return False
+
 
 uniquify :: [InstalledPackageInfo] -> [InstalledPackageInfo]
 uniquify []     = []
@@ -32,10 +44,11 @@ uniquify (ipi:ipis) =
 
 genIndex :: FilePath -> Graph -> IO ()
 genIndex odir graph = do
-  createAndWaitProcess (const $ return ()) (haddock args)
+  ri <- readInterfaces graph
+  createAndWaitProcess (const $ return ()) (haddock $ args ++ map sub ri)
   where sub (html, ifs) = "--read-interface=" ++ html ++ ',' : ifs
         args = [ "--odir=" ++ odir
                , "--gen-contents"
                , "--gen-index"
                , "--title=Haskell modules on this system"
-               ] ++ map sub (readInterfaces graph)
+               ]

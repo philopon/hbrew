@@ -1,4 +1,4 @@
-{-#LANGUAGE NoMonomorphismRestriction#-}
+
 module Distribution.HBrew.Cabal(cabalLibraryVersion, cabalDryRun, cabalInstall) where
 
 import Distribution.HBrew.Utils
@@ -40,7 +40,7 @@ cabalLibraryVersion = do
 cabalInstall :: FilePath -> [String] -> IO ()
 cabalInstall hbrewLibDir args = do
   time <- formatTime defaultTimeLocale "%s" `fmap` getCurrentTime
-  let path = hbrewLibDir </> "$pkg/$version/$compiler-$arch" </> time
+  let path = hbrewLibDir </> "$pkg/$version" </> time
   createAndWaitProcess (const $ return ())
     (cabal $ ["install", "--user", "--avoid-reinstall", "--prefix=" ++ path] ++ args)
 
