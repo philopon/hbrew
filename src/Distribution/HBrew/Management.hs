@@ -55,8 +55,8 @@ isSubDirectoryOf _a _b = if isAbsolute _a && isAbsolute _b
         sub (a:as) (b:bs) = if a == b then sub as bs else False
 
 reset :: String -> FilePath -> IO ()
-reset suf pDir = do
+reset ghcPkg pDir = do
   hbrewConfs <- filter (".hbrew.conf" `isSuffixOf`) `fmap` getDirectoryContents pDir
   mapM_ (unlink. (pDir </>)) hbrewConfs
-  recache suf
+  recache ghcPkg
 

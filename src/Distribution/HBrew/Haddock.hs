@@ -13,9 +13,6 @@ import Distribution.InstalledPackageInfo
 import Data.Maybe
 import Data.List
 
-haddock :: [String] -> CreateProcess
-haddock = proc "haddock"
-
 type ReadInterface = (FilePath, FilePath)
 
 readInterfaces :: Graph -> IO [ReadInterface]
@@ -42,10 +39,10 @@ uniquify (ipi:ipis) =
         pVer  = packageVersion . sourcePackageId
 
 
-genIndex :: FilePath -> Graph -> IO ()
-genIndex odir graph = do
+genIndex :: String -> FilePath -> Graph -> IO ()
+genIndex haddock odir graph = do
   ri <- readInterfaces graph
-  createAndWaitProcess (const $ return ()) (haddock $ args ++ map sub ri)
+  createAndWaitProcess (const $ return ()) (proc haddock $ args ++ map sub ri)
   where sub (html, ifs) = "--read-interface=" ++ html ++ ',' : ifs
         args = [ "--odir=" ++ odir
                , "--gen-contents"
