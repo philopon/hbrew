@@ -9,12 +9,12 @@ import Distribution.Simple.Compiler
 import Distribution.HBrew.Utils
 import Distribution.Version
 
-ghcVersion :: IO (CompilerFlavor, Version, Arch)
-ghcVersion = do
+ghcVersion :: String -> IO (CompilerFlavor, Version, Arch)
+ghcVersion suf = do
   let comp = maybe buildCompilerFlavor id defaultCompilerFlavor
   let arch = buildArch
   v <- readText `fmap`
-       createAndWaitProcess fun (proc "ghc" ["--numeric-version"]){std_out = CreatePipe}
+       createAndWaitProcess fun (proc ("ghc" ++ suf) ["--numeric-version"]){std_out = CreatePipe}
   return (comp, v :: Version, arch)
   where fun (_, Just stdout, _) = hGetLine stdout
         fun _                   = error "ghcVersion: CreatePipe failed."
