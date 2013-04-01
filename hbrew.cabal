@@ -19,3 +19,4 @@ executable hbrew
   ghc-options:         -O2 -Wall
   -- other-modules:       
   build-depends:       base >= 4.5, process >= 1.1, Cabal >= 1.14, pretty, containers >= 0.5, directory, filepath, old-locale, time, unix, array
+  hs-source-dirs: src
