@@ -12,11 +12,12 @@ import Distribution.InstalledPackageInfo
 
 import Data.Maybe
 import Data.List
+import Data.Function
 
 type ReadInterface = (FilePath, FilePath)
 
 readInterfaces :: Graph -> IO [ReadInterface]
-readInterfaces gr = filterM exists. catMaybes. map toReadInterface.
+readInterfaces gr = filterM exists. mapMaybe toReadInterface.
                     uniquify. filter exposed. map packageInfo $ flatten gr
   where toReadInterface pinfo = (,) <$>
                                 listToMaybe (haddockHTMLs      pinfo) <*>
@@ -34,7 +35,7 @@ uniquify :: [InstalledPackageInfo] -> [InstalledPackageInfo]
 uniquify []     = []
 uniquify (ipi:ipis) =
   let (eq, o) = partition ((== pName ipi). pName) ipis
-  in maximumBy (\a b -> pVer a `compare` pVer b) (ipi:eq) : uniquify o
+  in maximumBy (compare `on` pVer) (ipi:eq) : uniquify o
   where pName = packageName    . sourcePackageId
         pVer  = packageVersion . sourcePackageId
 

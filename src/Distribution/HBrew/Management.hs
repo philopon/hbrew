@@ -19,15 +19,14 @@ push hbrewDir pDir nodes =
   pushFiles pDir (map ((hbrewDir </>). cabalFile) $ filter isUserPkg nodes)
 
 pushFiles :: FilePath -> [FilePath] -> IO ()
-pushFiles ucDir files = do
-  mapM_ (\f -> do let target = ucDir </> takeBaseName f <.> "hbrew.conf"
-                  e <- doesFileExist target
-                  when (not e) $ link f target
-        ) files
+pushFiles ucDir =
+  mapM_ $ \f -> do let target = ucDir </> takeBaseName f <.> "hbrew.conf"
+                   e <- doesFileExist target
+                   unless e $ link f target
 
 pull :: FilePath -> FilePath -> FilePath -> IO ()
 pull uConfDir libDir confDir = do
-  confs <- mapM (\path -> readConfFileIO (uConfDir </> path) >>= return. (path,) ) =<<
+  confs <- mapM (\path -> (path,) `fmap` readConfFileIO (uConfDir </> path)) =<<
            filter (\f -> ".conf" `isSuffixOf` f &&
                          not (".hbrew.conf" `isSuffixOf` f)
                   ) `fmap` getDirectoryContents uConfDir
@@ -47,12 +46,11 @@ pull uConfDir libDir confDir = do
 
 
 isSubDirectoryOf :: FilePath -> FilePath -> Bool
-isSubDirectoryOf _a _b = if isAbsolute _a && isAbsolute _b
-                         then sub (splitDirectories _a) (splitDirectories _b)
-                         else False
+isSubDirectoryOf _a _b =
+  (isAbsolute _a && isAbsolute _b) && sub (splitDirectories _a) (splitDirectories _b)
   where sub _ [] = True
         sub [] _ = False
-        sub (a:as) (b:bs) = if a == b then sub as bs else False
+        sub (a:as) (b:bs) = (a == b) && sub as bs
 
 reset :: String -> FilePath -> IO ()
 reset ghcPkg pDir = do

@@ -24,7 +24,7 @@ import Text.PrettyPrint(render)
 
 import Data.Typeable(Typeable)
 import Data.Word
-
+import Data.Maybe
 
 split :: (a -> Bool) -> [a] -> [[a]]
 split p str = case span p str of
@@ -32,7 +32,7 @@ split p str = case span p str of
   (a, b) -> a : split p (tail b)
 
 readText :: Text a => String -> a 
-readText = maybe (error "no parse") id . simpleParse
+readText = fromMaybe (error "no parse") . simpleParse
 
 showText :: Text a => a -> String
 showText = render. disp
@@ -66,7 +66,7 @@ createDirectoryRecursive base [] = return base
 createDirectoryRecursive base (p:ps) = do
   let d = base </> p
   e <- doesDirectoryExist d
-  when (not e) $ createDirectory d
+  unless e $ createDirectory d
   createDirectoryRecursive d ps
 
 getContentsRecursive :: Word -> FilePath -> IO [FilePath]

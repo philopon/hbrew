@@ -8,7 +8,7 @@ import System.FilePath
 
 import System.Process (CreateProcess(..), StdStream(..), proc)
 
-import Data.Maybe (catMaybes)
+import Data.Maybe (mapMaybe)
 
 import Distribution.Text(simpleParse)
 import Distribution.Package(PackageId)
@@ -18,20 +18,18 @@ import Data.Time(getCurrentTime, formatTime)
 import System.Locale(defaultTimeLocale)
 
 cabalDryRun :: String -> [String] -> [PackageId] -> IO [PackageId]
-cabalDryRun cabal args pkgs = do
+cabalDryRun cabal args pkgs = 
   createAndWaitProcess fun
-    (proc cabal $ ["install", "--dry-run", "--avoid-reinstall"] ++ args ++ map showText pkgs
-    ){std_out = CreatePipe}
+  (proc cabal $ ["install", "--dry-run", "--avoid-reinstall"] ++ args ++ map showText pkgs){std_out = CreatePipe}
 
-    where fun (_, Just stdout, _) = hGetContents stdout >>=
-                                    return. catMaybes. map simpleParse. lines
+    where fun (_, Just stdout, _) = (mapMaybe simpleParse. lines) `fmap` hGetContents stdout
           fun _ = error "cabalDryRun: CreatePipe failed."
 
 cabalLibraryVersion :: String -> IO Version
-cabalLibraryVersion cabal = do
+cabalLibraryVersion cabal =
   createAndWaitProcess fun (proc cabal ["--version"]){std_out = CreatePipe}
   where fun (_, Just stdout, _) =
-          (last. catMaybes. map simpleParse. split (`notElem` " \r\n")) `fmap` hGetContents stdout
+          (last. mapMaybe simpleParse. split (`notElem` " \r\n")) `fmap` hGetContents stdout
         fun _ = error "cabalLibraryVersion: CreatePipe failed."
 
 cabalInstall :: String -> FilePath -> [String] -> IO ()

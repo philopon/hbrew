@@ -89,11 +89,10 @@ makeConfigGraph uConfs gConfs = do
                                     Nothing -> False
                                     Just nx -> let iids = depends $ packageInfo nx
                                                    nds  = map (\i -> lookupNode' i dict nodes) iids
-                                                   ys   = catMaybes $
-                                                          map (\i -> case i of
-                                                                  Just ny -> M.lookup ny nodes
-                                                                  Nothing -> Nothing
-                                                              ) nds
+                                                   ys   = mapMaybe (\i -> case i of
+                                                                       Just ny -> M.lookup ny nodes
+                                                                       Nothing -> Nothing
+                                                                   ) nds
                                                in y `elem` ys
                             ]
   return $ Graph nodes (array ((0,0), (size,size)) edges) dict revDict
@@ -103,7 +102,7 @@ type Procedure = (Graph, [PackageId])
 
 makeProcedure :: Graph -> [PackageId] -> Procedure
 makeProcedure _all pids =
-  let nodes = nub $ concatMap (\pid -> maybe [] id $ lookupNodesByPid pid _all) pids
+  let nodes = nub $ concatMap (\pid -> fromMaybe [] $ lookupNodesByPid pid _all) pids
       rej    = rejectConflicts pids . rejectConflictsWithToInstalls pids $ descendant _all nodes
       ins    = filter (`notMemberPid` rej) pids
   in (dropGlobal rej, ins)
@@ -136,7 +135,7 @@ conflicts Graph{nodes} = sub nodes
           Just ((n,i), mp) ->
             let name   = packageName. sourcePackageId . packageInfo
                 (c, o) = M.partitionWithKey (\k _ -> name n == name k) mp
-            in if M.null c then sub o else (M.insert n i c) : sub o
+            in if M.null c then sub o else M.insert n i c : sub o
 
 ancestorIdx :: Graph -> IntSet -> IntSet
 ancestorIdx = dfsIdx parentIdx
@@ -150,9 +149,9 @@ parentIdx   gr@Graph{nodes} i = IS.filter (flip (hasEdgeIdx gr) i) . IS.fromList
 
 dfs :: (Graph -> Int -> IntSet) -> Graph -> [Node] -> Graph
 dfs fun gr@Graph{nodes} nds =
-  let idx = IS.fromList . catMaybes $ map (flip M.lookup nodes) nds
+  let idx = IS.fromList . catMaybes $ map (`M.lookup` nodes) nds
       set = dfsIdx fun gr idx
-  in gr{nodes = M.filter (\i -> i `IS.member` set) nodes}
+  in gr{nodes = M.filter (`IS.member` set) nodes}
 
 dfsIdx :: (Graph -> Int -> IntSet) -> Graph -> IntSet -> IntSet
 dfsIdx fun gr _is = _is `IS.union` go IS.empty _is

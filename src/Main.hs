@@ -28,6 +28,7 @@ import Distribution.HBrew.Ghc
 import Distribution.Version
 
 import Data.List
+import Data.Function
 
 cabalCheck :: String -> IO ()
 cabalCheck cabal = do
@@ -35,7 +36,7 @@ cabalCheck cabal = do
   cbl  <- cabalLibraryVersion cabal
   when (cbl /= cabalVersion) $ hPutStrLn stderr $
     "Warning: Cabal library of cabal-install(" ++ showText cbl ++
-    ") does't match it of " ++ prog ++ '(': showText cabalVersion ++ ")"
+    ") doesn't match it of " ++ prog ++ '(': showText cabalVersion ++ ")"
 
 data Config = Config { programName       :: String
                      , confUserConfDir   :: FilePath
@@ -60,14 +61,14 @@ makeConfig Options{ghc, ghcPkg} = do
   hbLibdir   <- createDirectoryRecursive home [".cabal", "hbrew", "lib",  ghcVer]
   hbConfDir  <- createDirectoryRecursive home [".cabal", "hbrew", "conf", ghcVer]
   hbDockdir  <- createDirectoryRecursive home [".cabal", "hbrew", "doc",  ghcVer]
-  return $ Config { programName       = pName
-                  , confUserConfDir   = uConfDir
-                  , confGlobalConfDir = gConfDir
-                  , confBinDir        = binDir
-                  , confHBrewLibDir   = hbLibdir
-                  , confHBrewConfDir  = hbConfDir
-                  , confHBrewDocDir   = hbDockdir
-                  }
+  return Config { programName       = pName
+                , confUserConfDir   = uConfDir
+                , confGlobalConfDir = gConfDir
+                , confBinDir        = binDir
+                , confHBrewLibDir   = hbLibdir
+                , confHBrewConfDir  = hbConfDir
+                , confHBrewDocDir   = hbDockdir
+                }
 
 configGraph :: Config -> IO Graph
 configGraph Config{confGlobalConfDir, confHBrewConfDir} = do
@@ -87,7 +88,7 @@ installAction Options{ghcPkg, cabal} args
   let (toPush, toIns) = makeProcedure graph toInstall
   push confHBrewConfDir confUserConfDir $ flatten toPush
   recache ghcPkg
-  when (not $ null toIns) $ do
+  unless (null toIns) $ do
     cabalInstall cabal confHBrewLibDir ("--haddock-hyperlink-source":
                                         ("--symlink-bindir=" ++ confBinDir):
                                         args ++ map showText toIns)
@@ -115,7 +116,7 @@ toInstallPkgs :: String -> [String] -> [PackageId] -> IO [PackageId]
 toInstallPkgs cabal args pkgs = do
   dryrun <- cabalDryRun cabal args pkgs
   let vPkgs = filter (not. null. versionBranch. packageVersion) pkgs
-  return $ nubBy (\a b -> packageName a == packageName b) (vPkgs ++ dryrun)
+  return $ nubBy ((==) `on` packageName) (vPkgs ++ dryrun)
 
 data Options = Options { ghc :: String
                        , ghcPkg :: String
@@ -157,7 +158,7 @@ setDoDryRun  Help        = Help
 options :: [OptDescr (Options -> Options)]
 options =
   [ Option "h" ["help"]   (NoArg $ const Help) "show this message."
-  , Option [] ["dry-run"] (NoArg $ setDoDryRun) "dry-run"
+  , Option [] ["dry-run"] (NoArg setDoDryRun) "dry-run"
   , Option [] ["with-ghc"]  (ReqArg setGhc "PATH") "ghc program name."
   , Option [] ["with-ghc-pkg"]  (ReqArg setGhcPkg "PATH") "ghc-pkg program name."
   , Option [] ["with-haddock"]  (ReqArg setHaddock "PATH") "haddock program name."

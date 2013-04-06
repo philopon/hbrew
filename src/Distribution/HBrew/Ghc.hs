@@ -8,10 +8,11 @@ import Distribution.System
 import Distribution.Simple.Compiler
 import Distribution.HBrew.Utils
 import Distribution.Version
+import Data.Maybe
 
 ghcVersion :: String -> IO (CompilerFlavor, Version, Arch)
 ghcVersion ghc = do
-  let comp = maybe buildCompilerFlavor id defaultCompilerFlavor
+  let comp = fromMaybe buildCompilerFlavor defaultCompilerFlavor
   let arch = buildArch
   v <- readText `fmap`
        createAndWaitProcess fun (proc ghc ["--numeric-version"]){std_out = CreatePipe}
