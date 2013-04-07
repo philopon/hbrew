@@ -80,7 +80,7 @@ configGraph Config{confGlobalConfDir, confHBrewConfDir} = do
 
 installAction :: Options -> [String] -> Config -> [PackageId] -> IO ()
 installAction Help _ _ _ = error "installAction: pig fly"
-installAction Options{ghcPkg, cabal} args
+installAction Options{ghcPkg, cabal, verbosity} args
   conf@Config{confUserConfDir, confHBrewConfDir, confHBrewLibDir, confBinDir} pkgs = do
   reset ghcPkg confUserConfDir
   toInstall <- toInstallPkgs cabal args pkgs
@@ -89,9 +89,11 @@ installAction Options{ghcPkg, cabal} args
   push confHBrewConfDir confUserConfDir $ flatten toPush
   recache ghcPkg
   unless (null toIns) $ do
-    cabalInstall cabal confHBrewLibDir ("--haddock-hyperlink-source":
-                                        ("--symlink-bindir=" ++ confBinDir):
-                                        args ++ map showText toIns)
+    let opts = ("--haddock-hyperlink-source":
+                ("--symlink-bindir=" ++ confBinDir):
+                args ++ map showText toIns)
+    when (verbosity > Right 0) $ print opts
+    cabalInstall cabal confHBrewLibDir opts
       `catch` (\(_::SomeException) -> finalizer >> exitFailure)
     finalizer
     where finalizer = pull confUserConfDir confHBrewLibDir confHBrewConfDir >> recache ghcPkg
@@ -118,11 +120,12 @@ toInstallPkgs cabal args pkgs = do
   let vPkgs = filter (not. null. versionBranch. packageVersion) pkgs
   return $ nubBy ((==) `on` packageName) (vPkgs ++ dryrun)
 
-data Options = Options { ghc :: String
-                       , ghcPkg :: String
-                       , haddock :: String
-                       , cabal :: String
-                       , doDryRun  :: Bool
+data Options = Options { ghc        :: String
+                       , ghcPkg     :: String
+                       , haddock    :: String
+                       , cabal      :: String
+                       , doDryRun   :: Bool
+                       , verbosity  :: Either String Int
                        }
              | Help
 
@@ -132,6 +135,7 @@ defaultOptions = Options { ghc = "ghc"
                          , haddock = "haddock"
                          , cabal   = "cabal"
                          , doDryRun = False
+                         , verbosity = Right 0
                          }
 
 setGhc :: String -> Options -> Options
@@ -150,10 +154,14 @@ setCabal :: String -> Options -> Options
 setCabal v o@Options{} = o{cabal = v}
 setCabal _ Help        = Help
 
-
 setDoDryRun :: Options -> Options
 setDoDryRun  o@Options{} = o{doDryRun = True}
 setDoDryRun  Help        = Help
+
+setVerbosity :: Maybe String -> Options -> Options
+setVerbosity (Just v) o@Options{} = o{verbosity = Left v}
+setVerbosity Nothing  o@Options{} = o{verbosity = Right 1}
+setVerbosity _        Help        = Help
 
 options :: [OptDescr (Options -> Options)]
 options =
@@ -163,6 +171,7 @@ options =
   , Option [] ["with-ghc-pkg"]  (ReqArg setGhcPkg "PATH") "ghc-pkg program name."
   , Option [] ["with-haddock"]  (ReqArg setHaddock "PATH") "haddock program name."
   , Option [] ["with-cabal"]  (ReqArg setCabal "PATH") "cabal program name."
+  , Option "v" ["verbose"]  (OptArg setVerbosity "INT") "verbose level[0-1]"
   ]
 
 help :: String -> String
@@ -202,7 +211,8 @@ main = do
     (_, [], _) -> showHelp "command not specified."
     (o, n:ns, []) -> case foldl (flip id) defaultOptions o of
       Help -> showHelp ""
-      opts@Options{doDryRun, cabal, ghc, ghcPkg, haddock} -> do
+      opts'@Options{doDryRun, cabal, ghc, ghcPkg, haddock, verbosity = v'} -> do
+        let opts = opts'{verbosity = Right $ either read id v'}
         maybe (return ()) throwIO =<< programCheck opts
         cabalCheck cabal
         config <- makeConfig opts

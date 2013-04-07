@@ -13,6 +13,7 @@ require
 
 * ghc/ghc-pkg/haddock
 * cabal
+* hscolour
 
 installation
 ----
