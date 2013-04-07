@@ -91,7 +91,7 @@ installAction Options{ghcPkg, cabal, verbosity} args
   unless (null toIns) $ do
     let opts = ("--haddock-hyperlink-source":
                 ("--symlink-bindir=" ++ confBinDir):
-                args ++ map showText toIns)
+                args ++ map showText pkgs)
     when (verbosity > Right 0) $ print opts
     cabalInstall cabal confHBrewLibDir opts
       `catch` (\(_::SomeException) -> finalizer >> exitFailure)
