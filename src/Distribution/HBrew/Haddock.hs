@@ -30,7 +30,6 @@ readInterfaces gr = filterM exists. mapMaybe toReadInterface.
                                             putStrLn " does not exists."
                                             return False
 
-
 uniquify :: [InstalledPackageInfo] -> [InstalledPackageInfo]
 uniquify []     = []
 uniquify (ipi:ipis) =

@@ -15,6 +15,7 @@ import System.Console.GetOpt
 
 import Distribution.Simple.Utils(cabalVersion)
 import Distribution.InstalledPackageInfo(installedPackageId)
+import Distribution.Package
 
 import Distribution.HBrew.Utils
 import Distribution.HBrew.GhcPkg
@@ -27,7 +28,6 @@ import Distribution.HBrew.Ghc
 import Data.Maybe
 import Data.List
 
-
 configGraph :: Config -> IO Graph
 configGraph Config{confGlobalConfDir, confHBrewConfDir} = do
   uConfs <- (map (confHBrewConfDir  </>) . filter (`notElem` [".", ".."])) `fmap`
@@ -36,17 +36,35 @@ configGraph Config{confGlobalConfDir, confHBrewConfDir} = do
             getDirectoryContents confGlobalConfDir
   makeConfigGraph uConfs gConfs
 
+isInstalled :: FilePath -> PackageId -> IO Bool
+isInstalled confHBrewLibDir pid = do
+  doesDirectoryExist $ confHBrewLibDir </> showText (pkgName pid) </> showText (pkgVersion pid)
+
+installCommon :: Config -> [String] -> [String]
+                 -> IO ([String], [PackageIdentifier], Graph, [PackageId])
+installCommon conf@Config{ghcPkg, cabal, confUserConfDir, confHBrewLibDir} args pkgs = do
+  reset ghcPkg confUserConfDir
+  toInstall    <- cabalDryRun cabal args pkgs -- [packageid]
+  graph     <- configGraph conf
+  
+  (lib, pOnly) <- partitionPackages cabal pkgs
+  let pOnlyIds = filter (\pid -> pkgName pid `elem` map snd pOnly) toInstall
+  installedPrograms <- filterM (isInstalled confHBrewLibDir) pOnlyIds
+  let toInsPrograms = filter (\(_,p) -> p `notElem` map pkgName installedPrograms) pOnly
+      pkgs'         = map fst $ toInsPrograms ++ lib
+
+  let toInstall' = filter (`notElem` installedPrograms) toInstall
+      (toPush, toIns) = makeProcedure graph toInstall'
+  return (pkgs', installedPrograms, toPush, toIns)
+
 installAction :: Config -> [String] -> [String] -> IO ()
 installAction conf@Config{ ghcPkg, cabal, verbosity
                          , confUserConfDir, confHBrewConfDir, confHBrewLibDir} args pkgs = do
-  reset ghcPkg confUserConfDir
-  toInstall <- cabalDryRun cabal args pkgs
-  graph     <- configGraph conf
-  let (toPush, toIns) = makeProcedure graph toInstall
+  (pkgs', _, toPush, toIns) <- installCommon conf args pkgs
   push confHBrewConfDir confUserConfDir $ flatten toPush
   recache ghcPkg
   unless (null toIns) $ do
-    let opts = args ++ pkgs
+    let opts = args ++ pkgs'
     when (verbosity > 0) $ print opts
     cabalInstall cabal confHBrewLibDir opts
       `E.catch` (\(_::SomeException) -> finalizer >> exitFailure)
@@ -54,11 +72,9 @@ installAction conf@Config{ ghcPkg, cabal, verbosity
     where finalizer = pull confUserConfDir confHBrewLibDir confHBrewConfDir >> recache ghcPkg
 
 dryRunAction :: Config -> [String] -> [String] -> IO ()
-dryRunAction conf@Config{ghcPkg,cabal,confUserConfDir} args pkgs = do
-  reset ghcPkg confUserConfDir
-  toInstall <- cabalDryRun cabal args pkgs
-  graph     <- configGraph conf
-  let (toPush, toIns) = makeProcedure graph toInstall
+dryRunAction conf args pkgs = do
+  (_, installed, toPush, toIns) <- installCommon conf args pkgs
+  mapM_ (\p -> putStr "[EXISTS]  " >> putStrLn (showText p) ) installed
   mapM_ (\n -> putStr "[PUSH]    " >>
                putStrLn (showText . installedPackageId $ packageInfo n)) (flatten toPush)
   mapM_ (\p -> putStr "[INSTALL] " >> putStrLn (showText p) ) toIns
@@ -230,7 +246,7 @@ main = do
                   , "--with-ghc-pkg=" ++ ghcPkg
                   , "--with-haddock=" ++ haddock
                   , "--symlink-bindir=" ++ confBinDir
-                  ]
+                  ] ++ opts
   case cmd of
     "install" -> (if doDryRun then dryRunAction else installAction)
                  conf cabalOpts pkgs
