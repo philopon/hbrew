@@ -37,14 +37,14 @@ configGraph Config{confGlobalConfDir, confHBrewConfDir} = do
   makeConfigGraph uConfs gConfs
 
 isInstalled :: FilePath -> PackageId -> IO Bool
-isInstalled confHBrewLibDir pid = do
+isInstalled confHBrewLibDir pid =
   doesDirectoryExist $ confHBrewLibDir </> showText (pkgName pid) </> showText (pkgVersion pid)
 
 installCommon :: Config -> [String] -> [String]
                  -> IO ([String], [PackageIdentifier], Graph, [PackageId])
 installCommon conf@Config{ghcPkg, cabal, confUserConfDir, confHBrewLibDir} args pkgs = do
   reset ghcPkg confUserConfDir
-  toInstall    <- cabalDryRun cabal args pkgs -- [packageid]
+  toInstall    <- cabalDryRun cabal args pkgs
   graph     <- configGraph conf
   
   (lib, pOnly) <- partitionPackages cabal pkgs
@@ -162,10 +162,10 @@ options =
   , Option "v" ["verbose"]       (OptArg setVerbosity "INT")  "verbose level[0-1]"
   ]
 
-showHelp :: [Char] -> IO b
+showHelp :: String -> IO b
 showHelp errs = do
   pName <- getProgName
-  when (not $ null errs) $ hPutStrLn stderr errs
+  unless (null errs) $ hPutStrLn stderr errs
   putStrLn (usageInfo (prefix pName) options)
   if null errs then exitSuccess else exitFailure
   where prefix pName = init $ unlines
@@ -189,7 +189,7 @@ cabalCheck cabal = do
     ") doesn't match it of " ++ prog ++ '(': showText cabalVersion ++ ")"
 
 parseOptions :: [String] -> IO (Config, [String], [String])
-parseOptions args = do
+parseOptions args = 
   case getOpt Permute options args of
     (_, [], _)     -> showHelp "command not specified."
     (f, cs, [])    -> case foldl (flip id) defaultOptions f of
