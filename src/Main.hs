@@ -16,7 +16,6 @@ import System.Console.GetOpt
 import Distribution.Simple.Utils(cabalVersion)
 import Distribution.InstalledPackageInfo(installedPackageId)
 
-import Distribution.Package
 import Distribution.HBrew.Utils
 import Distribution.HBrew.GhcPkg
 import Distribution.HBrew.Cabal
@@ -27,7 +26,7 @@ import Distribution.HBrew.Ghc
 
 import Data.Maybe
 import Data.List
-import Data.Function
+
 
 configGraph :: Config -> IO Graph
 configGraph Config{confGlobalConfDir, confHBrewConfDir} = do
@@ -39,7 +38,7 @@ configGraph Config{confGlobalConfDir, confHBrewConfDir} = do
 
 installAction :: Config -> [String] -> [String] -> IO ()
 installAction conf@Config{ ghcPkg, cabal, verbosity
-                         , confUserConfDir, confHBrewConfDir, confHBrewLibDir, confBinDir} args pkgs = do
+                         , confUserConfDir, confHBrewConfDir, confHBrewLibDir} args pkgs = do
   reset ghcPkg confUserConfDir
   toInstall <- cabalDryRun cabal args pkgs
   graph     <- configGraph conf
@@ -47,9 +46,7 @@ installAction conf@Config{ ghcPkg, cabal, verbosity
   push confHBrewConfDir confUserConfDir $ flatten toPush
   recache ghcPkg
   unless (null toIns) $ do
-    let opts = "--haddock-hyperlink-source":
-               ("--symlink-bindir=" ++ confBinDir):
-               args ++ pkgs
+    let opts = args ++ pkgs
     when (verbosity > 0) $ print opts
     cabalInstall cabal confHBrewLibDir opts
       `E.catch` (\(_::SomeException) -> finalizer >> exitFailure)
@@ -175,7 +172,7 @@ cabalCheck cabal = do
     "Warning: Cabal library of cabal-install(" ++ showText cbl ++
     ") doesn't match it of " ++ prog ++ '(': showText cabalVersion ++ ")"
 
-parseOptions :: [String] -> IO (Config, [String])
+parseOptions :: [String] -> IO (Config, [String], [String])
 parseOptions args = do
   case getOpt Permute options args of
     (_, [], _)     -> showHelp "command not specified."
@@ -213,24 +210,32 @@ parseOptions args = do
                           , confHBrewConfDir  = hbConfDir
                           , confHBrewDocDir   = hbDockdir
                           }
-        return (conf, cs)
+        let (opts, cmds) = partition (\arg -> case arg of
+                                         '-':_ -> True
+                                         _     -> False
+                                     ) cs
+        return (conf, opts, cmds)
     (_, _, err) -> showHelp (concat err)
   where maybeUnlessM p f = p >>= \r -> unless (isJust r) f
 
-
 main :: IO ()
 main = do
-  (conf@Config{ghc, ghcPkg, haddock, doDryRun, cabal}, n:ns) <- getArgs >>= parseOptions
+  (conf@Config{ghc, ghcPkg, haddock, hsColour, doDryRun, cabal, confBinDir}, opts, cmd:pkgs) <-
+    getArgs >>= parseOptions
   cabalCheck cabal
-  let cabalOpts = [ "--with-ghc="     ++ ghc
+  let cabalOpts = (case hsColour of
+                      Just hsc -> (["--with-hscolour=" ++ hsc, "--haddock-hyperlink-source"] ++)
+                      Nothing  -> id)
+                  [ "--with-ghc="     ++ ghc
                   , "--with-ghc-pkg=" ++ ghcPkg
                   , "--with-haddock=" ++ haddock
+                  , "--symlink-bindir=" ++ confBinDir
                   ]
-  case n of
+  case cmd of
     "install" -> (if doDryRun then dryRunAction else installAction)
-                 conf cabalOpts ns
+                 conf cabalOpts pkgs
     "setup"   -> (if doDryRun then dryRunAction else installAction)
-                 conf ("--only-dependencies": cabalOpts) ns
+                 conf ("--only-dependencies": cabalOpts) pkgs
     "reset"   -> reset ghcPkg (confUserConfDir conf)
     "haddock" -> haddockAction haddock conf
     _         -> showHelp "command not found"
