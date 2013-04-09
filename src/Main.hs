@@ -48,7 +48,6 @@ data Config = Config { programName       :: String
                      }
               deriving Show
 
-
 makeConfig :: Options -> IO Config
 makeConfig Help = error "makeConfig: pig fly"
 makeConfig Options{ghc, ghcPkg} = do
@@ -72,13 +71,13 @@ makeConfig Options{ghc, ghcPkg} = do
 
 configGraph :: Config -> IO Graph
 configGraph Config{confGlobalConfDir, confHBrewConfDir} = do
-  uConfs <- (map (confHBrewConfDir </>) . filter (`notElem` [".", ".."])) `fmap`
+  uConfs <- (map (confHBrewConfDir  </>) . filter (`notElem` [".", ".."])) `fmap`
             getDirectoryContents confHBrewConfDir
   gConfs <- (map (confGlobalConfDir </>) . filter (`notElem` [".", "..", "package.cache"])) `fmap`
             getDirectoryContents confGlobalConfDir
   makeConfigGraph uConfs gConfs
 
-installAction :: Options -> [String] -> Config -> [PackageId] -> IO ()
+installAction :: Options -> [String] -> Config -> [String] -> IO ()
 installAction Help _ _ _ = error "installAction: pig fly"
 installAction Options{ghcPkg, cabal, verbosity} args
   conf@Config{confUserConfDir, confHBrewConfDir, confHBrewLibDir, confBinDir} pkgs = do
@@ -89,9 +88,9 @@ installAction Options{ghcPkg, cabal, verbosity} args
   push confHBrewConfDir confUserConfDir $ flatten toPush
   recache ghcPkg
   unless (null toIns) $ do
-    let opts = ("--haddock-hyperlink-source":
-                ("--symlink-bindir=" ++ confBinDir):
-                args ++ map showText pkgs)
+    let opts = "--haddock-hyperlink-source":
+               ("--symlink-bindir=" ++ confBinDir):
+               args ++ pkgs
     when (verbosity > Right 0) $ print opts
     cabalInstall cabal confHBrewLibDir opts
       `catch` (\(_::SomeException) -> finalizer >> exitFailure)
@@ -103,7 +102,7 @@ haddockAction haddock conf@Config{confHBrewDocDir} = do
   graph <- configGraph conf
   genIndex haddock confHBrewDocDir graph
 
-dryRunAction :: Options -> [String] -> Config -> [PackageId] -> IO ()
+dryRunAction :: Options -> [String] -> Config -> [String] -> IO ()
 dryRunAction Help _ _ _ = error "dryRunAction: pig fly"
 dryRunAction Options{ghcPkg,cabal} args conf@Config{confUserConfDir} pkgs = do
   reset ghcPkg confUserConfDir
@@ -111,30 +110,29 @@ dryRunAction Options{ghcPkg,cabal} args conf@Config{confUserConfDir} pkgs = do
   graph     <- configGraph conf
   let (toPush, toIns) = makeProcedure graph toInstall
   mapM_ (\n -> putStr "[PUSH]    " >>
-               putStrLn (showText . installedPackageId $ packageInfo n)) $ flatten toPush
+               putStrLn (showText . installedPackageId $ packageInfo n)) (flatten toPush)
   mapM_ (\p -> putStr "[INSTALL] " >> putStrLn (showText p) ) toIns
 
-toInstallPkgs :: String -> [String] -> [PackageId] -> IO [PackageId]
+toInstallPkgs :: String -> [String] -> [String] -> IO [PackageId]
 toInstallPkgs cabal args pkgs = do
   dryrun <- cabalDryRun cabal args pkgs
-  let vPkgs = filter (not. null. versionBranch. packageVersion) pkgs
-  return $ nubBy ((==) `on` packageName) (vPkgs ++ dryrun)
+  return $ nubBy ((==) `on` packageName) dryrun
 
-data Options = Options { ghc        :: String
-                       , ghcPkg     :: String
-                       , haddock    :: String
-                       , cabal      :: String
-                       , doDryRun   :: Bool
-                       , verbosity  :: Either String Int
+data Options = Options { ghc       :: String
+                       , ghcPkg    :: String
+                       , haddock   :: String
+                       , cabal     :: String
+                       , doDryRun  :: Bool
+                       , verbosity :: Either String Int
                        }
              | Help
 
 defaultOptions :: Options
-defaultOptions = Options { ghc = "ghc"
-                         , ghcPkg = "ghc-pkg"
-                         , haddock = "haddock"
-                         , cabal   = "cabal"
-                         , doDryRun = False
+defaultOptions = Options { ghc       = "ghc"
+                         , ghcPkg    = "ghc-pkg"
+                         , haddock   = "haddock"
+                         , cabal     = "cabal"
+                         , doDryRun  = False
                          , verbosity = Right 0
                          }
 
@@ -165,13 +163,13 @@ setVerbosity _        Help        = Help
 
 options :: [OptDescr (Options -> Options)]
 options =
-  [ Option "h" ["help"]   (NoArg $ const Help) "show this message."
-  , Option [] ["dry-run"] (NoArg setDoDryRun) "dry-run"
-  , Option [] ["with-ghc"]  (ReqArg setGhc "PATH") "ghc program name."
-  , Option [] ["with-ghc-pkg"]  (ReqArg setGhcPkg "PATH") "ghc-pkg program name."
-  , Option [] ["with-haddock"]  (ReqArg setHaddock "PATH") "haddock program name."
-  , Option [] ["with-cabal"]  (ReqArg setCabal "PATH") "cabal program name."
-  , Option "v" ["verbose"]  (OptArg setVerbosity "INT") "verbose level[0-1]"
+  [ Option "h" ["help"]         (NoArg $ const Help)         "show this message."
+  , Option []  ["dry-run"]      (NoArg  setDoDryRun)         "dry-run"
+  , Option []  ["with-ghc"]     (ReqArg setGhc       "PATH") "ghc program name."
+  , Option []  ["with-ghc-pkg"] (ReqArg setGhcPkg    "PATH") "ghc-pkg program name."
+  , Option []  ["with-haddock"] (ReqArg setHaddock   "PATH") "haddock program name."
+  , Option []  ["with-cabal"]   (ReqArg setCabal     "PATH") "cabal program name."
+  , Option "v" ["verbose"]      (OptArg setVerbosity "INT")  "verbose level[0-1]"
   ]
 
 help :: String -> String
@@ -190,14 +188,14 @@ help pName = init $ unlines
 programCheck :: Options -> IO (Maybe IOError)
 programCheck Help = error "programCheck: pig fly"
 programCheck Options{ghc,ghcPkg,haddock,cabal} = do
-  _ <- toEither "ghc not found."     <$> findExecutable ghc
-  _ <- toEither "ghc-pkg not found." <$> findExecutable ghcPkg
-  _ <- toEither "cabal not found."   <$> findExecutable cabal
+  _ <- toEither "ghc not found."          <$> findExecutable ghc
+  _ <- toEither "ghc-pkg not found."      <$> findExecutable ghcPkg
+  _ <- toEither "cabal not found."        <$> findExecutable cabal
   toMaybe . toEither "haddock not found." <$> findExecutable haddock
   where toEither msg Nothing  = Left (userError msg)
         toEither _   (Just a) = Right a
-        toMaybe (Left msg) = Just msg
-        toMaybe (Right _)  = Nothing
+        toMaybe (Left msg)    = Just msg
+        toMaybe (Right _)     = Nothing
 
 main :: IO ()
 main = do
@@ -221,9 +219,9 @@ main = do
                         , "--with-haddock=" ++ haddock]
         case n of
           "install" -> (if doDryRun then dryRunAction else installAction)
-                       opts cabalOpts config $ map readText ns
+                       opts cabalOpts config ns
           "setup"   -> (if doDryRun then dryRunAction else installAction)
-                       opts ("--only-dependencies": cabalOpts) config $ map readText ns
+                       opts ("--only-dependencies": cabalOpts) config ns
           "reset"   -> reset ghcPkg (confUserConfDir config)
           "haddock" -> haddockAction haddock config
           _         -> showHelp "command not found"

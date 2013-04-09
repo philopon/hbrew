@@ -17,10 +17,10 @@ import Distribution.Version
 import Data.Time(getCurrentTime, formatTime)
 import System.Locale(defaultTimeLocale)
 
-cabalDryRun :: String -> [String] -> [PackageId] -> IO [PackageId]
+cabalDryRun :: String -> [String] -> [String] -> IO [PackageId]
 cabalDryRun cabal args pkgs = 
   createAndWaitProcess fun
-  (proc cabal $ ["install", "--dry-run", "--avoid-reinstall"] ++ args ++ map showText pkgs){std_out = CreatePipe}
+  (proc cabal $ ["install", "--dry-run", "--avoid-reinstall"] ++ args ++ pkgs){std_out = CreatePipe}
 
     where fun (_, Just stdout, _) = (mapMaybe simpleParse. lines) `fmap` hGetContents stdout
           fun _ = error "cabalDryRun: CreatePipe failed."
