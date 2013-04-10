@@ -84,6 +84,17 @@ haddockAction haddock conf@Config{confHBrewDocDir} = do
   graph <- configGraph conf
   genIndex haddock confHBrewDocDir graph
 
+programsAction :: Config -> IO ()
+programsAction Config{confHBrewLibDir} = do
+  ps <- programs confHBrewLibDir
+  let maxlen = foldl' (\a (p,_) -> max a (length $ showText p)) 0 ps
+  forM_ ps $ \(p,vs) -> do
+    let len = length $ showText p
+    putStr (showText p) >> putStr (replicate (maxlen - len + 2) ' ')
+    forM_ (init vs) (\v -> putStr (showText v) >> putStr ",\t")
+    putStr (showText $ last vs)
+    putStrLn ""
+
 data RawOptions = RawOptions { ghc'       :: String
                              , ghcPkg'    :: String
                              , haddock'   :: String
@@ -171,11 +182,13 @@ showHelp errs = do
   where prefix pName = init $ unlines
                        [ "usage: " ++ pName ++ " COMMAND [Args]"
                        , "  COMMAND:"
-                       , "    install\tinstall package"
-                       , "    setup\tinstall package with --only-dependences"
+                       , "    install              install package"
+                       , "    setup                install package with --only-dependences"
                        , ""
-                       , "    reset\tpull all hbrew packages"
-                       , "    haddock\tgenerate haddock"
+                       , "    reset                pull all hbrew packages"
+                       , "    haddock              generate haddock"
+                       , ""
+                       , "    list programs        list executable files."
                        , ""
                        , "  OPTIONS:"
                        ]
@@ -236,7 +249,7 @@ parseOptions args =
 
 main :: IO ()
 main = do
-  (conf@Config{ghc, ghcPkg, haddock, hsColour, doDryRun, cabal, confBinDir}, opts, cmd:pkgs) <-
+  (conf@Config{ghc, ghcPkg, haddock, hsColour, doDryRun, cabal, confBinDir}, opts, cmds) <-
     getArgs >>= parseOptions
   cabalCheck cabal
   let cabalOpts = (case hsColour of
@@ -247,12 +260,13 @@ main = do
                   , "--with-haddock=" ++ haddock
                   , "--symlink-bindir=" ++ confBinDir
                   ] ++ opts
-  case cmd of
-    "install" -> (if doDryRun then dryRunAction else installAction)
-                 conf cabalOpts pkgs
-    "setup"   -> (if doDryRun then dryRunAction else installAction)
-                 conf ("--only-dependencies": cabalOpts) pkgs
-    "reset"   -> reset ghcPkg (confUserConfDir conf)
-    "haddock" -> haddockAction haddock conf
-    _         -> showHelp "command not found"
+  case cmds of
+    "install":pkgs      -> (if doDryRun then dryRunAction else installAction)
+                           conf cabalOpts pkgs
+    "setup":pkgs        -> (if doDryRun then dryRunAction else installAction)
+                           conf ("--only-dependencies": cabalOpts) pkgs
+    "reset":_           -> reset ghcPkg (confUserConfDir conf)
+    "haddock":_         -> haddockAction haddock conf
+    "list":"programs":_ -> programsAction conf
+    _                   -> showHelp "command not found"
 

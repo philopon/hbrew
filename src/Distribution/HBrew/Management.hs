@@ -1,5 +1,5 @@
 {-#LANGUAGE TupleSections#-}
-module Distribution.HBrew.Management(push, pull, reset) where
+module Distribution.HBrew.Management(push, pull, reset, programs) where
 
 import Control.Exception
 import Control.Monad
@@ -12,6 +12,9 @@ import Distribution.HBrew.Compatibility
 import Distribution.HBrew.Utils
 import Distribution.HBrew.GhcPkg
 import Distribution.InstalledPackageInfo
+import Distribution.Package
+import Distribution.Version
+
 import Data.List
 
 push :: FilePath -> FilePath -> [Node] -> IO ()
@@ -57,4 +60,17 @@ reset ghcPkg pDir = do
   hbrewConfs <- filter (".hbrew.conf" `isSuffixOf`) `fmap` getDirectoryContents pDir
   mapM_ (unlink. (pDir </>)) hbrewConfs
   recache ghcPkg
+
+programs :: FilePath -> IO [(PackageName, [Version])]
+programs dir = do
+  pNames <- dropDots `fmap` getDirectoryContents dir
+  vids   <- forM pNames $ \p -> do
+    versions  <- dropDots `fmap` getDirectoryContents (dir </> p)
+    binIds    <- forM versions $ \v -> do
+      ids <- dropDots `fmap` getDirectoryContents (dir </> p </> v)
+      e   <- forM ids $ \i -> doesDirectoryExist (dir </> p </> v </> i </> "bin")
+      return .map fst. filter snd $ zip ids e
+    return. map fst. filter (not . null. snd) $ zip (map readText versions) binIds
+  return . filter (not. null. snd) $ zip (map readText pNames) vids
+  where dropDots = filter (`notElem` [".", ".."])
 
