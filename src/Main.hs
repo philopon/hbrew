@@ -4,6 +4,7 @@ module Main (main) where
 
 import Prelude
 import Control.Monad
+import Control.Applicative
 import Control.Exception as E
 
 import System.IO
@@ -17,6 +18,7 @@ import Distribution.Simple.Utils(cabalVersion)
 import Distribution.InstalledPackageInfo(installedPackageId)
 import Distribution.Package
 
+import Distribution.HBrew.Compatibility
 import Distribution.HBrew.Utils
 import Distribution.HBrew.GhcPkg
 import Distribution.HBrew.Cabal
@@ -30,9 +32,9 @@ import Data.List
 
 configGraph :: Config -> IO Graph
 configGraph Config{confGlobalConfDir, confHBrewConfDir} = do
-  uConfs <- (map (confHBrewConfDir  </>) . filter (`notElem` [".", ".."])) `fmap`
+  uConfs <- (map (confHBrewConfDir  </>) . filter (`notElem` [".", ".."])) <$>
             getDirectoryContents confHBrewConfDir
-  gConfs <- (map (confGlobalConfDir </>) . filter (`notElem` [".", "..", "package.cache"])) `fmap`
+  gConfs <- (map (confGlobalConfDir </>) . filter (`notElem` [".", "..", "package.cache"])) <$>
             getDirectoryContents confGlobalConfDir
   makeConfigGraph uConfs gConfs
 
@@ -41,7 +43,7 @@ isInstalled confHBrewLibDir pid =
   doesDirectoryExist $ confHBrewLibDir </> showText (pkgName pid) </> showText (pkgVersion pid)
 
 installCommon :: Config -> [String] -> [String]
-                 -> IO ([String], [PackageIdentifier], Graph, [PackageId])
+                 -> IO ([String], [String], [PackageIdentifier], Graph, [PackageId])
 installCommon conf@Config{ghcPkg, cabal, confUserConfDir, confHBrewLibDir} args pkgs = do
   reset ghcPkg confUserConfDir
   toInstall    <- cabalDryRun cabal args pkgs
@@ -51,29 +53,30 @@ installCommon conf@Config{ghcPkg, cabal, confUserConfDir, confHBrewLibDir} args 
   let pOnlyIds = filter (\pid -> pkgName pid `elem` map snd pOnly) toInstall
   installedPrograms <- filterM (isInstalled confHBrewLibDir) pOnlyIds
   let toInsPrograms = filter (\(_,p) -> p `notElem` map pkgName installedPrograms) pOnly
-      pkgs'         = map fst $ toInsPrograms ++ lib
 
   let toInstall' = filter (`notElem` installedPrograms) toInstall
       (toPush, toIns) = makeProcedure graph toInstall'
-  return (pkgs', installedPrograms, toPush, toIns)
+  return (map fst toInsPrograms, map fst lib, installedPrograms, toPush, toIns)
 
 installAction :: Config -> [String] -> [String] -> IO ()
 installAction conf@Config{ ghcPkg, cabal, verbosity
                          , confUserConfDir, confHBrewConfDir, confHBrewLibDir} args pkgs = do
-  (pkgs', _, toPush, toIns) <- installCommon conf args pkgs
+  (prog, lib, _, toPush, toIns) <- installCommon conf args pkgs
   push confHBrewConfDir confUserConfDir $ flatten toPush
   recache ghcPkg
   unless (null toIns) $ do
-    let opts = args ++ pkgs'
+    let opts = args ++ prog ++ lib
     when (verbosity > 0) $ print opts
     cabalInstall cabal confHBrewLibDir opts
-      `E.catch` (\(_::SomeException) -> finalizer >> exitFailure)
-    finalizer
-    where finalizer = pull confUserConfDir confHBrewLibDir confHBrewConfDir >> recache ghcPkg
+      `E.catch` (\(_::SomeException) -> finalizer (not $ null prog) >> exitFailure)
+    finalizer $ not (null prog)
+    where finalizer dolink = do pull confUserConfDir confHBrewLibDir confHBrewConfDir
+                                when dolink $ programLinkAction True conf
+                                recache ghcPkg
 
 dryRunAction :: Config -> [String] -> [String] -> IO ()
 dryRunAction conf args pkgs = do
-  (_, installed, toPush, toIns) <- installCommon conf args pkgs
+  (_, _, installed, toPush, toIns) <- installCommon conf args pkgs
   mapM_ (\p -> putStr "[EXISTS]  " >> putStrLn (showText p) ) installed
   mapM_ (\n -> putStr "[PUSH]    " >>
                putStrLn (showText . installedPackageId $ packageInfo n)) (flatten toPush)
@@ -84,16 +87,34 @@ haddockAction haddock conf@Config{confHBrewDocDir} = do
   graph <- configGraph conf
   genIndex haddock confHBrewDocDir graph
 
-programsAction :: Config -> IO ()
-programsAction Config{confHBrewLibDir} = do
+programListAction :: Config -> IO ()
+programListAction Config{confHBrewLibDir} = do
   ps <- programs confHBrewLibDir
   let maxlen = foldl' (\a (p,_) -> max a (length $ showText p)) 0 ps
   forM_ ps $ \(p,vs) -> do
     let len = length $ showText p
     putStr (showText p) >> putStr (replicate (maxlen - len + 2) ' ')
-    forM_ (init vs) (\v -> putStr (showText v) >> putStr ",\t")
-    putStr (showText $ last vs)
+    forM_ (init vs) (\(v,_) -> putStr (showText v) >> putStr ", ")
+    putStr (showText . fst $ last vs)
     putStrLn ""
+
+cleanBinDir :: FilePath -> IO ()
+cleanBinDir confHBrewBinDir = do
+  links <- filter (`notElem` [".", ".."]) <$> getDirectoryContents confHBrewBinDir
+  mapM_ (unShortcut . (confHBrewBinDir </>)) links
+
+programLinkAction :: Bool -> Config -> IO ()
+programLinkAction quiet Config{confHBrewBinDir, confHBrewLibDir} = do
+  ps <- programs confHBrewLibDir
+  cleanBinDir confHBrewBinDir
+  forM_ ps $ \(pkg,vs) ->
+    forM_ (zip (sortBy (\(a,_) (b,_) -> b `compare` a) vs) (True:repeat False)) $ \((v, ids), isMax) -> do
+      let binDir   = confHBrewLibDir </> showText pkg </> showText v </> head ids </> "bin"
+      mapM_ (\p -> do shortcut (binDir </> p) (confHBrewBinDir </> p ++ '-': showText v)
+                      when isMax $ shortcut (binDir </> p) (confHBrewBinDir </> p)
+            ) =<< filter (`notElem` [".", ".."]) <$> getDirectoryContents binDir
+      unless quiet $ putStr "Linking " >> putStr (showText pkg) >> putChar '-' >> putStrLn (showText v)
+
 
 data RawOptions = RawOptions { ghc'       :: String
                              , ghcPkg'    :: String
@@ -115,7 +136,7 @@ data Config = Config { ghc               :: String
                      , programName       :: String
                      , confUserConfDir   :: FilePath
                      , confGlobalConfDir :: FilePath
-                     , confBinDir        :: FilePath
+                     , confHBrewBinDir   :: FilePath
                      , confHBrewLibDir   :: FilePath
                      , confHBrewConfDir  :: FilePath
                      , confHBrewDocDir   :: FilePath
@@ -179,20 +200,22 @@ showHelp errs = do
   unless (null errs) $ hPutStrLn stderr errs
   putStrLn (usageInfo (prefix pName) options)
   if null errs then exitSuccess else exitFailure
-  where prefix pName = init $ unlines
-                       [ "usage: " ++ pName ++ " COMMAND [Args]"
-                       , "  COMMAND:"
-                       , "    install              install package"
-                       , "    setup                install package with --only-dependences"
-                       , ""
-                       , "    reset                pull all hbrew packages"
-                       , "    haddock              generate haddock"
-                       , ""
-                       , "    list programs        list executable files."
-                       , ""
-                       , "  OPTIONS:"
-                       ]
-
+  where prefix pName =
+          init $ unlines
+          [ "usage: " ++ pName ++ " [OPTIONS] COMMAND"
+          , "  COMMAND:"
+          , "    install PKG1 [PKG2..] -- [CABAL OPTS]      install package"
+          , "    setup   PKG1 [PKG2..] -- [CABAL OPTS]      install package with --only-dependences"
+          , ""
+          , "    reset                                      pull all hbrew packages"
+          , "    haddock                                    generate haddock"
+          , ""
+          , "    program list                               list executable files."
+          , "    program link                               link programs to hbrew/bin directory."
+          , ""
+          , "  OPTIONS:"
+          ]
+  
 cabalCheck :: String -> IO ()
 cabalCheck cabal = do
   prog <- getProgName
@@ -219,7 +242,7 @@ parseOptions args =
         pName      <- getProgName
         uConfDir   <- packageDir ghcPkg' User
         gConfDir   <- packageDir ghcPkg' Global
-        ghcVer     <- showGhcVersion `fmap` ghcVersion ghc'
+        ghcVer     <- showGhcVersion <$> ghcVersion ghc'
         binDir     <- createDirectoryRecursive home [".cabal", "hbrew", "bin"]
         hbLibdir   <- createDirectoryRecursive home [".cabal", "hbrew", "lib",  ghcVer]
         hbConfDir  <- createDirectoryRecursive home [".cabal", "hbrew", "conf", ghcVer]
@@ -234,7 +257,7 @@ parseOptions args =
                           , programName       = pName
                           , confUserConfDir   = uConfDir
                           , confGlobalConfDir = gConfDir
-                          , confBinDir        = binDir
+                          , confHBrewBinDir   = binDir
                           , confHBrewLibDir   = hbLibdir
                           , confHBrewConfDir  = hbConfDir
                           , confHBrewDocDir   = hbDockdir
@@ -249,7 +272,7 @@ parseOptions args =
 
 main :: IO ()
 main = do
-  (conf@Config{ghc, ghcPkg, haddock, hsColour, doDryRun, cabal, confBinDir}, opts, cmds) <-
+  (conf@Config{ghc, ghcPkg, haddock, hsColour, doDryRun, cabal}, opts, cmds) <-
     getArgs >>= parseOptions
   cabalCheck cabal
   let cabalOpts = (case hsColour of
@@ -258,15 +281,16 @@ main = do
                   [ "--with-ghc="     ++ ghc
                   , "--with-ghc-pkg=" ++ ghcPkg
                   , "--with-haddock=" ++ haddock
-                  , "--symlink-bindir=" ++ confBinDir
                   ] ++ opts
   case cmds of
-    "install":pkgs      -> (if doDryRun then dryRunAction else installAction)
-                           conf cabalOpts pkgs
-    "setup":pkgs        -> (if doDryRun then dryRunAction else installAction)
-                           conf ("--only-dependencies": cabalOpts) pkgs
-    "reset":_           -> reset ghcPkg (confUserConfDir conf)
-    "haddock":_         -> haddockAction haddock conf
-    "list":"programs":_ -> programsAction conf
-    _                   -> showHelp "command not found"
+    "install":pkgs        -> (if doDryRun then dryRunAction else installAction)
+                             conf cabalOpts pkgs
+    "setup":pkgs          -> (if doDryRun then dryRunAction else installAction)
+                             conf ("--only-dependencies": cabalOpts) pkgs
+    "reset":_             -> reset ghcPkg (confUserConfDir conf)
+    "haddock":_           -> haddockAction haddock conf
+    "program":"list":_    -> programListAction conf
+    "program":"link":_    -> programLinkAction False conf
+    _                     -> showHelp "command not found"
+
 

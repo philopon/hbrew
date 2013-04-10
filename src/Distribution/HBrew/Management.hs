@@ -61,7 +61,7 @@ reset ghcPkg pDir = do
   mapM_ (unlink. (pDir </>)) hbrewConfs
   recache ghcPkg
 
-programs :: FilePath -> IO [(PackageName, [Version])]
+programs :: FilePath -> IO [(PackageName, [(Version, [String])])]
 programs dir = do
   pNames <- dropDots `fmap` getDirectoryContents dir
   vids   <- forM pNames $ \p -> do
@@ -70,7 +70,7 @@ programs dir = do
       ids <- dropDots `fmap` getDirectoryContents (dir </> p </> v)
       e   <- forM ids $ \i -> doesDirectoryExist (dir </> p </> v </> i </> "bin")
       return .map fst. filter snd $ zip ids e
-    return. map fst. filter (not . null. snd) $ zip (map readText versions) binIds
+    return. filter (not . null. snd) $ zip (map readText versions) binIds
   return . filter (not. null. snd) $ zip (map readText pNames) vids
   where dropDots = filter (`notElem` [".", ".."])
 
