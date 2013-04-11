@@ -15,7 +15,8 @@ import System.Directory
 import System.Console.GetOpt
 
 import Distribution.Simple.Utils(cabalVersion)
-import Distribution.InstalledPackageInfo(installedPackageId)
+import Distribution.InstalledPackageInfo(InstalledPackageInfo,
+                                         installedPackageId, sourcePackageId, importDirs)
 import Distribution.Package
 
 import Distribution.HBrew.Compatibility
@@ -28,6 +29,7 @@ import Distribution.HBrew.Haddock
 import Distribution.HBrew.Ghc
 
 import Data.Maybe
+import Data.Char
 import Data.List
 
 configGraph :: Config -> IO Graph
@@ -114,6 +116,41 @@ programLinkAction quiet Config{confHBrewBinDir, confHBrewLibDir} = do
                       when isMax $ shortcut (binDir </> p) (confHBrewBinDir </> p)
             ) =<< filter (`notElem` [".", ".."]) <$> getDirectoryContents binDir
       unless quiet $ putStr "Linking " >> putStr (showText pkg) >> putChar '-' >> putStrLn (showText v)
+
+getUniqueId :: FilePath -> InstalledPackageInfo -> Maybe String
+getUniqueId confHBrewConfDir pInfo =
+  let pid = sourcePackageId pInfo
+      base   = splitDirectories $
+               confHBrewConfDir </> showText (packageName pid) </> showText (packageVersion pid)
+      target = map splitDirectories (importDirs pInfo)
+  in listToMaybe $ mapMaybe (go base) target
+  where go [] (b:_) = Just b
+        go _ []     = Nothing
+        go (a:as) (b:bs) = if a == b then go as bs else Nothing
+
+removeLibraryAction :: Config -> [String] -> IO ()
+removeLibraryAction conf@Config{confHBrewLibDir} pkgs = do
+  graph     <- configGraph conf
+  let ps   = map readText pkgs :: [PackageId]
+      base = concatMap (`lookupNodesFuzzy` graph) ps
+      rms  = nub. flatten $ ancestor graph base
+  mapM_ (putStrLn. showText . installedPackageId . packageInfo) rms
+  putStr "delete " >> putStr (show $ length rms) >> putStrLn " packages. continue? (y/n)"
+  when (null rms) $ fail "not match"
+  confirm
+  forM_ rms $ \node -> do
+    --removeFile $ cabalFile node
+    let mbuid  = getUniqueId confHBrewLibDir (packageInfo node)
+        pId    = sourcePackageId $ packageInfo node
+        pkgdir = confHBrewLibDir </> showText (packageName pId) </> showText (packageVersion pId)
+    case mbuid of
+      Nothing  -> putStr "cannot get unique id of " >> putStr (showText pId)
+      Just uid -> do removeFile $ cabalFile node
+                     removeDirectoryRecursive $ pkgdir </> uid
+  where confirm = getChar >>= \c -> case toLower c of
+          'y' -> return ()
+          'n' -> fail "interrupt"
+          _   -> putStr "(y/n)" >> confirm
 
 
 data RawOptions = RawOptions { ghc'       :: String
@@ -206,6 +243,7 @@ showHelp errs = do
           , "  COMMAND:"
           , "    install PKG1 [PKG2..] -- [CABAL OPTS]      install package"
           , "    setup   PKG1 [PKG2..] -- [CABAL OPTS]      install package with --only-dependences"
+          , "    remove  PKG1 [PKG2..]                      remove libraries from hbrew"
           , ""
           , "    reset                                      pull all hbrew packages"
           , "    haddock                                    generate haddock"
@@ -291,6 +329,7 @@ main = do
     "haddock":_           -> haddockAction haddock conf
     "program":"list":_    -> programListAction conf
     "program":"link":_    -> programLinkAction False conf
+    "remove":pkgs         -> removeLibraryAction conf pkgs
     _                     -> showHelp "command not found"
 
 

@@ -3,6 +3,8 @@ module Distribution.HBrew.DepGraph
        ( Graph, isUserPkg
        , Node, packageInfo, cabalFile
        , flatten
+       , lookupNodesFuzzy
+       , ancestor
        , makeConfigGraph, makeProcedure
        ) where
 
@@ -19,6 +21,7 @@ import Data.Maybe
 import Data.List
 
 import Distribution.Package hiding (depends)
+import Distribution.Version
 import Distribution.InstalledPackageInfo
 import Distribution.HBrew.Utils
 
@@ -102,7 +105,7 @@ type Procedure = (Graph, [PackageId])
 
 makeProcedure :: Graph -> [PackageId] -> Procedure
 makeProcedure _all pids =
-  let nodes = nub $ concatMap (\pid -> fromMaybe [] $ lookupNodesByPid pid _all) pids
+  let nodes = nub $ concatMap (`lookupNodesByPid` _all) pids
       rej    = rejectConflicts pids . rejectConflictsWithToInstalls pids $ descendant _all nodes
       ins    = filter (`notMemberPid` rej) pids
   in (dropGlobal rej, ins)
@@ -140,6 +143,9 @@ conflicts Graph{nodes} = sub nodes
 ancestorIdx :: Graph -> IntSet -> IntSet
 ancestorIdx = dfsIdx parentIdx
 
+ancestor :: Graph -> [Node] -> Graph
+ancestor = (updateDict.) . dfs parentIdx
+
 descendant :: Graph -> [Node] -> Graph
 descendant = (updateDict.) . dfs childrenIdx
 
@@ -162,10 +168,22 @@ dfsIdx fun gr _is = _is `IS.union` go IS.empty _is
                              nextdone = done `IS.union` neighbor
                          in neighbor `IS.union` go nextdone next
 
-lookupNodesByPid :: PackageId -> Graph -> Maybe [Node]
+lookupNodesFuzzy :: PackageId -> Graph -> [Node]
+lookupNodesFuzzy pid gr = 
+  if packageVersion pid == Version [] []
+    then lookupNodesByPName (packageName pid) gr
+    else lookupNodesByPid   pid gr
+
+lookupNodesByPName :: PackageName -> Graph -> [Node]
+lookupNodesByPName pname Graph{revDict, dict, nodes} = do
+  iids <- M.elems $ M.filterWithKey (curry $ (== pname). packageName .fst) revDict
+  mapMaybe (\iid -> lookupNode' iid dict nodes) iids
+
+
+lookupNodesByPid :: PackageId -> Graph -> [Node]
 lookupNodesByPid pid Graph{revDict, dict, nodes} = do
-  iids <- M.lookup pid revDict
-  return. catMaybes $ map (\iid -> lookupNode' iid dict nodes) iids
+  iids <- maybeToList $ M.lookup pid revDict
+  mapMaybe (\iid -> lookupNode' iid dict nodes) iids
 
 lookupNode' :: InstalledPackageId -> Map InstalledPackageId PackageId -> Map Node b -> Maybe Node
 lookupNode' iid dict nodes = do pid <- M.lookup iid dict
