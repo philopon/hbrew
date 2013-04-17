@@ -20,19 +20,20 @@ installation
 
 1. install binary
 
-```bash
-$ git clone https://github.com/philopon/hbrew.git
-$ cd hbrew
-$ cabal configure
-$ cabal build
-$ cabal install
-```
+   ```bash
+   $ git clone https://github.com/philopon/hbrew.git
+   $ cd hbrew
+   $ cabal configure
+   $ cabal build
+   $ cabal install
+   ```
 
 2. cleaning haskell package
-
-```bash
-$ for l in `ghc-pkg list --user | awk 'NR > 1 {print $0}'`; do ghc-pkg unregister $l --force; done
-```
+   
+   ```bash
+   rm -r $HOME/.ghc/* # or backup these folder
+   ghc-pkg recache --user
+   ```
 
 usage
 ----
