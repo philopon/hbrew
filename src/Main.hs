@@ -160,6 +160,7 @@ data RawOptions = RawOptions { ghc'       :: String
                              , hsColour'  :: String
                              , doDryRun'  :: Bool
                              , verbosity' :: String
+                             , onlyDeps'  :: Bool
                              }
                 | Help
 
@@ -170,6 +171,8 @@ data Config = Config { ghc               :: String
                      , hsColour          :: Maybe String
                      , doDryRun          :: Bool
                      , verbosity         :: Int
+                     , onlyDeps          :: Bool
+                       
                      , programName       :: String
                      , confUserConfDir   :: FilePath
                      , confGlobalConfDir :: FilePath
@@ -188,6 +191,7 @@ defaultOptions = RawOptions { ghc'       = "ghc"
                             , hsColour'  = "HsColour"
                             , doDryRun'  = False
                             , verbosity' = "0"
+                            , onlyDeps'  = False
                             }
 
 set f o@RawOptions{} = f o
@@ -208,6 +212,7 @@ options =
   , Option []  ["with-cabal"]        (ReqArg (\v -> set (\o -> o{cabal'    = v})) "PATH") "cabal program name."
   , Option []  ["with-hscolour"]     (ReqArg (\v -> set (\o -> o{hsColour' = v})) "PATH") "HsColour program name."
   , Option "v" ["verbose"]           (OptArg setVerbosity "INT")                          "verbose level[0-1]"
+  , Option []  ["only-dependencies"] (NoArg $ set (\o -> o{onlyDeps'    = True}))         "install with \"--only-dependencies\""
   ]
 
 showHelp :: String -> IO b
@@ -221,7 +226,6 @@ showHelp errs = do
           [ "usage: " ++ pName ++ " [OPTIONS] COMMAND"
           , "  COMMAND:"
           , "    install PKG1 [PKG2..] -- [CABAL OPTS]      install package"
-          , "    setup   PKG1 [PKG2..] -- [CABAL OPTS]      install package with --only-dependences"
           , "    remove  PKG1 [PKG2..]                      remove libraries from hbrew"
           , ""
           , "    reset                                      pull all hbrew packages"
@@ -247,7 +251,7 @@ parseOptions args =
     (_, [], _)     -> showHelp "command not specified."
     (f, cs, [])    -> case foldl (flip id) defaultOptions f of
       Help         -> showHelp []
-      RawOptions{ghc', ghcPkg', haddock', cabal', hsColour', doDryRun', verbosity'} -> do
+      RawOptions{ghc', ghcPkg', haddock', cabal', hsColour', doDryRun', verbosity', onlyDeps'} -> do
         verb <- readIO verbosity'
         maybeUnlessM (findExecutable ghc')     $ throwIO (userError "ghc not found.")
         maybeUnlessM (findExecutable ghcPkg')  $ throwIO (userError "ghc-pkg not found.")
@@ -271,6 +275,7 @@ parseOptions args =
                           , hsColour  = hsColour
                           , doDryRun  = doDryRun'
                           , verbosity = verb
+                          , onlyDeps  = onlyDeps'
                           , programName       = pName
                           , confUserConfDir   = uConfDir
                           , confGlobalConfDir = gConfDir
@@ -289,10 +294,11 @@ parseOptions args =
 
 main :: IO ()
 main = do
-  (conf@Config{ghc, ghcPkg, haddock, hsColour, doDryRun, cabal}, opts, cmds) <-
+  (conf@Config{ghc, ghcPkg, haddock, hsColour, doDryRun, cabal, onlyDeps}, opts, cmds) <-
     getArgs >>= parseOptions
   cabalCheck cabal
-  let cabalOpts = (case hsColour of
+  let cabalOpts = (if onlyDeps then ("--only-dependencies":) else id) $
+                  (case hsColour of
                       Just hsc -> (["--with-hscolour=" ++ hsc, "--haddock-hyperlink-source"] ++)
                       Nothing  -> id)
                   [ "--with-ghc="     ++ ghc
@@ -302,8 +308,6 @@ main = do
   case cmds of
     "install":pkgs        -> (if doDryRun then dryRunAction else installAction)
                              conf cabalOpts pkgs
-    "setup":pkgs          -> (if doDryRun then dryRunAction else installAction)
-                             conf ("--only-dependencies": cabalOpts) pkgs
     "reset":_             -> reset ghcPkg (confUserConfDir conf)
     "haddock":_           -> haddockAction haddock conf
     "program":"list":_    -> programListAction conf
