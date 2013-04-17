@@ -194,8 +194,9 @@ defaultOptions = RawOptions { ghc'       = "ghc"
                             , onlyDeps'  = False
                             }
 
+set :: (RawOptions -> RawOptions) -> RawOptions -> RawOptions
 set f o@RawOptions{} = f o
-set f Help           = Help
+set _ Help           = Help
 
 setVerbosity :: Maybe String -> RawOptions -> RawOptions
 setVerbosity (Just v) o@RawOptions{} = o{verbosity' = v}
