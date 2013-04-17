@@ -190,29 +190,8 @@ defaultOptions = RawOptions { ghc'       = "ghc"
                             , verbosity' = "0"
                             }
 
-setGhc :: String -> RawOptions -> RawOptions
-setGhc v o@RawOptions{} = o{ghc' = v}
-setGhc _ Help           = Help
-
-setGhcPkg :: String -> RawOptions -> RawOptions
-setGhcPkg v o@RawOptions{} = o{ghcPkg' = v}
-setGhcPkg _ Help           = Help
-
-setHaddock :: String -> RawOptions -> RawOptions
-setHaddock v o@RawOptions{} = o{haddock' = v}
-setHaddock _ Help           = Help
-
-setCabal :: String -> RawOptions -> RawOptions
-setCabal v o@RawOptions{} = o{cabal' = v}
-setCabal _ Help           = Help
-
-setHsColour :: String -> RawOptions -> RawOptions
-setHsColour v o@RawOptions{} = o{hsColour' = v}
-setHsColour _ Help           = Help
-
-setDoDryRun :: RawOptions -> RawOptions
-setDoDryRun  o@RawOptions{} = o{doDryRun' = True}
-setDoDryRun  Help           = Help
+set f o@RawOptions{} = f o
+set f Help           = Help
 
 setVerbosity :: Maybe String -> RawOptions -> RawOptions
 setVerbosity (Just v) o@RawOptions{} = o{verbosity' = v}
@@ -221,14 +200,14 @@ setVerbosity _        Help           = Help
 
 options :: [OptDescr (RawOptions -> RawOptions)]
 options =
-  [ Option "h" ["help"]          (NoArg $ const Help)         "show this message."
-  , Option []  ["dry-run"]       (NoArg  setDoDryRun)         "dry-run"
-  , Option []  ["with-ghc"]      (ReqArg setGhc       "PATH") "ghc program name."
-  , Option []  ["with-ghc-pkg"]  (ReqArg setGhcPkg    "PATH") "ghc-pkg program name."
-  , Option []  ["with-haddock"]  (ReqArg setHaddock   "PATH") "haddock program name."
-  , Option []  ["with-cabal"]    (ReqArg setCabal     "PATH") "cabal program name."
-  , Option []  ["with-hscolour"] (ReqArg setHsColour  "PATH") "HsColour program name."
-  , Option "v" ["verbose"]       (OptArg setVerbosity "INT")  "verbose level[0-1]"
+  [ Option "h" ["help"]              (NoArg $ const Help)                                 "show this message."
+  , Option []  ["dry-run"]           (NoArg $ set (\o -> o{doDryRun'    = True}))         "dry-run"
+  , Option []  ["with-ghc"]          (ReqArg (\v -> set (\o -> o{ghc'      = v})) "PATH") "ghc program name."
+  , Option []  ["with-ghc-pkg"]      (ReqArg (\v -> set (\o -> o{ghcPkg'   = v})) "PATH") "ghc-pkg program name."
+  , Option []  ["with-haddock"]      (ReqArg (\v -> set (\o -> o{haddock'  = v})) "PATH") "haddock program name."
+  , Option []  ["with-cabal"]        (ReqArg (\v -> set (\o -> o{cabal'    = v})) "PATH") "cabal program name."
+  , Option []  ["with-hscolour"]     (ReqArg (\v -> set (\o -> o{hsColour' = v})) "PATH") "HsColour program name."
+  , Option "v" ["verbose"]           (OptArg setVerbosity "INT")                          "verbose level[0-1]"
   ]
 
 showHelp :: String -> IO b
