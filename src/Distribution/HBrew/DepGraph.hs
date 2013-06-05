@@ -8,6 +8,8 @@ module Distribution.HBrew.DepGraph
        , makeConfigGraph, makeProcedure
        ) where
 
+import System.FilePath
+
 import Data.Map (Map)
 import qualified Data.Map as M
 
@@ -75,7 +77,8 @@ instance Ord Node where
 
 makeConfigGraph :: [FilePath] -> [FilePath] -> IO Graph
 makeConfigGraph uConfs gConfs = do
-  hInfo <- mapM (\f -> readConfFileIO f >>= \info -> return $ UserPkg info f) uConfs
+  hInfo <- mapM (\f -> readConfFileIO f >>= \info -> return $ UserPkg info f) $
+           filter ((== ".conf") . takeExtension) uConfs
   gInfo <- mapM (\f -> readConfFileIO f >>= \info -> return $ GlobalPkg info f) gConfs
 
   let info     = gInfo ++ hInfo

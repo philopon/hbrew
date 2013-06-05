@@ -1,10 +1,9 @@
 {-#LANGUAGE TupleSections#-}
 module Distribution.HBrew.Management(push, pull, reset, programs) where
 
-import Control.Exception
 import Control.Monad
 
-import System.IO.Error
+import System.IO
 import System.FilePath
 import System.Directory
 import Distribution.HBrew.DepGraph
@@ -40,10 +39,11 @@ pull uConfDir libDir confDir = do
   files <- mapM (\(f,_) -> do
                     let conf = confDir </> f
                     e <- doesFileExist conf
-                    if e
-                      then throwIO $
-                           mkIOError alreadyExistsErrorType "conf File" Nothing (Just conf)
-                      else renameFile (uConfDir </> f) conf >> return conf
+                    when e $ do
+                      renameFile conf (conf <.> "bak")
+                      hPutStrLn stderr $
+                        "Warning: " ++ conf ++ " file already exist. move to " ++ conf <.> "bak."
+                    renameFile (uConfDir </> f) conf >> return conf
                 ) hbrews
   pushFiles uConfDir files
 
