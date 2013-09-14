@@ -23,10 +23,15 @@ import Data.List
 cabalDryRun :: String -> [String] -> [String] -> IO [PackageId]
 cabalDryRun cabal args pkgs = 
   createAndWaitProcess fun
-  (proc cabal $ ["install", "--dry-run", "--avoid-reinstall"] ++ args ++ pkgs){std_out = CreatePipe}
+  (proc cabal $ ["install", "--dry-run"] ++ args ++ pkgs){std_out = CreatePipe}
 
-    where fun (_, Just stdout, _) = (mapMaybe simpleParse. lines) `fmap` hGetContents stdout
+    where fun (_, Just stdout, _) = 
+            (mapMaybe (simpleParse . takeWhile (/= ' ')). dropMessage. tail. lines)
+            `fmap` hGetContents stdout
           fun _ = error "cabalDryRun: CreatePipe failed."
+          dropMessage [] = []
+          dropMessage (m:ms) | "All the requested packages are already installed" `isPrefixOf` m = tail ms
+                             | otherwise = ms
 
 cabalLibraryVersion :: String -> IO Version
 cabalLibraryVersion cabal =
