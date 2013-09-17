@@ -1,4 +1,4 @@
-module Distribution.HBrew.Haddock (genIndex) where
+module Distribution.HBrew.Haddock (genIndex, haddocset) where
 
 import Control.Applicative
 import Control.Monad
@@ -49,3 +49,10 @@ genIndex haddock odir graph = do
                , "--gen-index"
                , "--title=Haskell modules on this system"
                ]
+
+haddocset :: String -> FilePath -> Graph -> IO ()
+haddocset prog odir graph = do
+  ri <- readInterfaces graph
+  createAndWaitProcess (const $ return ()) (proc prog $ args ++ map sub ri)
+  where sub (html, ifs) = "--input=" ++ html ++ ',' : ifs
+        args    = ["--force", "--output=" ++ odir]

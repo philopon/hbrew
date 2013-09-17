@@ -23,7 +23,7 @@ import Data.List
 cabalDryRun :: String -> [String] -> [String] -> IO [PackageId]
 cabalDryRun cabal args pkgs = 
   createAndWaitProcess fun
-  (proc cabal $ ["install", "--dry-run"] ++ args ++ pkgs){std_out = CreatePipe}
+  (proc cabal $ ["install", "--dry-run", "--avoid-reinstall"] ++ args ++ pkgs){std_out = CreatePipe}
 
     where fun (_, Just stdout, _) = 
             (mapMaybe (simpleParse . takeWhile (/= ' ')). dropMessage. tail. lines)

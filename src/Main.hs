@@ -89,6 +89,11 @@ haddockAction haddock conf@Config{confHBrewDocDir} = do
   graph <- configGraph conf
   genIndex haddock confHBrewDocDir graph
 
+haddocsetAction :: String -> Config -> IO ()
+haddocsetAction prog conf@Config{confHBrewDocDir} = do
+  graph <- configGraph conf
+  haddocset prog (confHBrewDocDir <.> "docset") graph
+
 programListAction :: Config -> IO ()
 programListAction Config{confHBrewLibDir} = do
   ps <- programs confHBrewLibDir
@@ -307,10 +312,12 @@ main = do
                   , "--with-haddock=" ++ haddock
                   ] ++ opts
   case cmds of
-    "install":pkgs        -> (if doDryRun then dryRunAction else installAction)
-                             conf cabalOpts pkgs
+    "install":pkgs        -> (if doDryRun then dryRunAction else installAction) conf cabalOpts pkgs
+    "install-deps":pkgs   -> let opts' = (if onlyDeps then id else ("--only-dependencies":)) cabalOpts
+                             in (if doDryRun then dryRunAction else installAction) conf opts' pkgs
     "reset":_             -> reset ghcPkg (confUserConfDir conf)
     "haddock":_           -> haddockAction haddock conf
+    "haddocset":_         -> haddocsetAction "haddocset" conf
     "program":"list":_    -> programListAction conf
     "program":"link":_    -> programLinkAction False conf
     "remove":pkgs         -> removeLibraryAction conf pkgs
